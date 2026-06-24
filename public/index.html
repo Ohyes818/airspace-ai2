@@ -123,7 +123,7 @@
             <label class="small"><b>圖片分析補充說明</b></label>
             <textarea id="note" placeholder="可描述這批圖片共同特徵，例如：短版、削肩、蕾絲、收腰、偏歐美微性感。"></textarea>
             <button id="analyzeBtn" style="width:100%">分析上傳圖片</button>
-            <div id="status" class="status">上傳圖片後，網站會自動依目前支線的暢滯銷因素分析評分。</div>
+            <div id="status" class="status">先上傳圖片並輸入補充說明，按下分析後才會開始評分。</div>
           </div>
         </div>
       </section>
@@ -291,9 +291,8 @@
           source: known ? '歷史款號' : '待分析'
         });
       }
-      els.status.textContent = `已選擇 ${state.length} 張圖片。`;
+      els.status.textContent = `已選擇 ${state.length} 張圖片。可先輸入補充說明，按「分析上傳圖片」後才會開始評分。`;
       renderResults();
-      runAnalysis();
     });
     document.getElementById('analyzeBtn').onclick = runAnalysis;
     renderAll();
