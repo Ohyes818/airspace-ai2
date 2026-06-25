@@ -48,7 +48,7 @@ async function analyzeImage(payload) {
     `只能選品類：${categories.join("、")}。`,
     "BRA TOP/背心歸上衣，褲裙歸裙，成套販售或明顯上下成套歸套裝。",
     `支線因素：\n${factorText}`,
-    "請只回 JSON：{\"title\":\"商品短名\",\"category\":\"品類\",\"features\":[\"特徵\"],\"summary\":\"一句評分解釋\"}"
+    "請只回 JSON：{\"title\":\"商品短名\",\"category\":\"品類\",\"middleCategory\":\"中分類或款式型，例如襯衫/背心/BRA/TEE/針織/罩衫/窄管褲/寬褲/洋裝\",\"features\":[\"特徵\"],\"summary\":\"一句評分解釋\"}"
   ].join("\n");
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -86,6 +86,7 @@ async function analyzeImage(payload) {
   return {
     title: parsed.title || "",
     category: parsed.category || "",
+    middleCategory: parsed.middleCategory || parsed.subCategory || "",
     features: Array.isArray(parsed.features) ? parsed.features : [],
     summary: parsed.summary || ""
   };
