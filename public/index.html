@@ -48,12 +48,15 @@
     .small { color:var(--muted); font-size:13px; line-height:1.5; }
     .labelCols { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
     .subhead { font-weight:800; font-size:13px; margin:8px 0; }
-    .analysisLayout { display:grid; grid-template-columns:minmax(0,1fr) minmax(500px,580px); gap:22px; align-items:start; }
-    .drop { border:1px dashed #9fb4cb; border-radius:8px; padding:18px; background:#fbfdff; margin-bottom:12px; }
+    .uploadWorkspace { display:grid; gap:18px; }
+    .uploadPanel { border-color:#b8cee4; background:linear-gradient(135deg,#f6fbff,#ffffff); box-shadow:0 14px 34px rgba(21,71,112,.08); }
+    .uploadTools { display:grid; grid-template-columns:minmax(320px,460px) 1fr 180px; gap:16px; align-items:end; }
+    .drop { border:1px dashed #7fa8d1; border-radius:8px; padding:16px; background:#eef6ff; margin:0; }
     .drop strong { display:block; margin-bottom:9px; }
-    textarea { width:100%; min-height:150px; resize:vertical; margin:8px 0; }
+    textarea { width:100%; min-height:120px; resize:vertical; margin:8px 0; }
     .apiRow { display:grid; grid-template-columns:1fr auto; gap:8px; margin:8px 0; }
     .status { color:var(--muted); font-size:13px; margin-top:8px; min-height:20px; }
+    .resultPanel { min-height:300px; background:#f8fafc; }
     .cards { display:grid; gap:12px; }
     .itemCard { display:grid; grid-template-columns:110px 1fr; gap:12px; border:1px solid var(--line); border-radius:8px; padding:10px; background:#fff; }
     .thumb { width:110px; height:140px; object-fit:cover; border-radius:7px; background:#eef2f6; }
@@ -71,8 +74,10 @@
     .refLine { border-left:3px solid var(--line); padding:5px 8px; background:#f8fafc; border-radius:4px; font-size:12px; color:#3c4f65; }
     .refLine.hot { border-left-color:#f0a442; }
     .refLine.slow { border-left-color:#8ba3bd; }
-    .chatBox { margin-top:18px; border:1px solid #cbd8e6; border-radius:10px; padding:14px; background:#f8fbff; box-shadow:0 10px 28px rgba(20,48,76,.06); }
-    .chatLog { display:grid; gap:10px; min-height:360px; max-height:560px; overflow:auto; margin:10px 0; padding-right:4px; }
+    .chatBox { border:1px solid #b8cee4; border-radius:10px; padding:16px; background:linear-gradient(135deg,#f4f8fc,#ffffff); box-shadow:0 14px 34px rgba(21,71,112,.08); }
+    .chatHead { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:8px; }
+    .chatHead b { font-size:18px; color:#09233f; }
+    .chatLog { display:grid; gap:10px; min-height:260px; max-height:440px; overflow:auto; margin:10px 0; padding-right:4px; }
     .chatMsg { border:1px solid var(--line); border-radius:9px; padding:11px 12px; background:#fff; font-size:13px; line-height:1.55; }
     .chatMsg.user { background:#f7ebf0; border-color:#e9bfd0; }
     .chatResults { display:grid; gap:9px; margin-top:10px; }
@@ -81,7 +86,7 @@
     .chatPic img { width:100%; height:100%; object-fit:cover; border-radius:7px; }
     .chatAsk { display:grid; grid-template-columns:1fr 92px; gap:8px; }
     .empty { border:1px dashed var(--line); border-radius:8px; padding:28px; text-align:center; color:var(--muted); background:#fff; }
-    @media (max-width:1100px) { .app { grid-template-columns:1fr; } aside { position:static; } .analysisLayout,.grid2,.catGrid { grid-template-columns:1fr; } }
+    @media (max-width:1100px) { .app { grid-template-columns:1fr; } aside { position:static; } .uploadTools,.grid2,.catGrid { grid-template-columns:1fr; } }
   </style>
 </head>
 <body>
@@ -123,27 +128,34 @@
       <section id="upload">
         <div class="small" style="color:#bd1f4f; margin-top:26px">功能 2</div>
         <h2>上傳圖片分析</h2>
-        <div class="analysisLayout">
-          <div class="resultPanel">
-            <div id="results" class="cards"><div class="empty">尚未上傳圖片。</div></div>
-          </div>
+        <div class="uploadWorkspace">
           <div class="uploadPanel">
+            <div class="uploadTools">
             <div class="drop">
               <strong>一次可上傳至少 30 張商品圖</strong>
               <div class="small">支援 JPG、PNG、WEBP。系統會依目前支線的分類暢滯銷因素評分。</div>
               <input id="files" type="file" accept="image/*" multiple />
             </div>
-            <label class="small"><b>圖片分析補充說明</b></label>
-            <textarea id="note" placeholder="可描述這批圖片共同特徵，例如：短版、削肩、蕾絲、收腰、偏歐美微性感。"></textarea>
-            <button id="analyzeBtn" style="width:100%">分析上傳圖片</button>
-            <div id="status" class="status">先上傳圖片並輸入補充說明，按下分析後才會開始評分。</div>
-            <div class="chatBox">
-              <label class="small"><b>AI 資料問答</b></label>
-              <div id="chatLog" class="chatLog"><div class="chatMsg">可以問：總銷超過500件的皮外套有哪些、熱銷皮外套有哪些、AS 滯銷蕾絲洋裝。問「總銷/累銷」會查 Excel；問「熱銷/滯銷」會查四週標籤。</div></div>
-              <div class="chatAsk">
-                <input id="chatInput" type="text" placeholder="輸入問題，例如：總銷超過500件的皮外套有哪些" />
-                <button id="chatBtn" type="button">詢問</button>
+              <div>
+                <label class="small"><b>圖片分析補充說明</b></label>
+                <textarea id="note" placeholder="可描述這批圖片共同特徵，例如：短版、削肩、蕾絲、收腰、偏歐美微性感。"></textarea>
               </div>
+              <button id="analyzeBtn" style="width:100%">分析上傳圖片</button>
+            </div>
+            <div id="status" class="status">先上傳圖片並輸入補充說明，按下分析後才會開始評分。</div>
+          </div>
+          <div class="resultPanel">
+            <div id="results" class="cards"><div class="empty">尚未上傳圖片。</div></div>
+          </div>
+          <div class="chatBox">
+            <div class="chatHead">
+              <b>AI 資料問答</b>
+              <span class="small">總銷/累銷查 Excel；熱銷/滯銷查四週標籤</span>
+            </div>
+            <div id="chatLog" class="chatLog"><div class="chatMsg">可以問：總銷超過500件的皮外套有哪些、熱銷皮外套有哪些、AS 滯銷蕾絲洋裝。問「總銷/累銷」會查 Excel；問「熱銷/滯銷」會查四週標籤。</div></div>
+            <div class="chatAsk">
+              <input id="chatInput" type="text" placeholder="輸入問題，例如：總銷超過500件的皮外套有哪些" />
+              <button id="chatBtn" type="button">詢問</button>
             </div>
           </div>
         </div>
