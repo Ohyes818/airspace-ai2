@@ -5,7 +5,19 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT || 10000);
+const publicDir = path.join(__dirname, "public");
 const htmlPath = path.join(__dirname, "public", "index.html");
+const contentTypes = {
+  ".html": "text/html; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8"
+};
 
 function sendJson(res, status, payload) {
   res.writeHead(status, {
@@ -28,6 +40,28 @@ function readBody(req) {
     req.on("end", () => resolve(body));
     req.on("error", reject);
   });
+}
+
+async function serveStatic(urlPath, res) {
+  const decodedPath = decodeURIComponent(urlPath.replace(/^\/+/, ""));
+  const filePath = path.resolve(publicDir, decodedPath);
+  const publicRoot = path.resolve(publicDir);
+  if (!filePath.startsWith(publicRoot + path.sep)) {
+    sendJson(res, 403, { error: "Forbidden" });
+    return true;
+  }
+  try {
+    const data = await fs.readFile(filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    res.writeHead(200, {
+      "Content-Type": contentTypes[ext] || "application/octet-stream",
+      "Cache-Control": ext === ".json" || ext === ".html" ? "no-store" : "public, max-age=86400"
+    });
+    res.end(data);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function analyzeImage(payload) {
@@ -108,6 +142,10 @@ async function handler(req, res) {
   if (req.method === "GET" && url.pathname === "/health") {
     sendJson(res, 200, { ok: true, hasApiKey: Boolean(process.env.OPENAI_API_KEY) });
     return;
+  }
+
+  if (req.method === "GET" && (url.pathname.startsWith("/data/") || url.pathname.startsWith("/assets/"))) {
+    if (await serveStatic(url.pathname, res)) return;
   }
 
   if (req.method === "POST" && url.pathname === "/api/analyze") {
