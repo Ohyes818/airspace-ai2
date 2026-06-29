@@ -241,6 +241,59 @@
     function channelLabel(c) {
       return c === '總' ? '總(網路+門市)' : c;
     }
+    function normalizeLoadedData() {
+      if (!APP || !Array.isArray(APP.branches)) return;
+      APP.dataVersion = APP.dataVersion || `資料修正版 ${new Date().toLocaleString('zh-TW')}`;
+      APP.branches.forEach(branch => {
+        const channels = branch.channels || ['總','網路','門市'];
+        const categories = branch.categories || [];
+        const rules = branch.rules || [];
+        const baseCards = new Map((branch.categoryCards || []).map(c => [c.category, c]));
+        const labelCounts = {};
+        channels.forEach(ch => {
+          labelCounts[ch] = {};
+          categories.forEach(cat => labelCounts[ch][cat] = {hot:0, slow:0});
+        });
+        Object.values(branch.labelsByCode || {}).flat().forEach(label => {
+          const ch = label.channel || '總';
+          const cat = label.category;
+          if (!labelCounts[ch] || !labelCounts[ch][cat]) return;
+          if (String(label.label || '').includes('暢銷')) labelCounts[ch][cat].hot += 1;
+          if (String(label.label || '').includes('滯銷')) labelCounts[ch][cat].slow += 1;
+        });
+        const hotRows = rows => rows
+          .filter(r => Number(r.hot_count || 0) > Number(r.slow_count || 0) && Number(r.hot_count || 0) > 0)
+          .sort((a,b) => Number(b.hot_count || 0) - Number(a.hot_count || 0))
+          .slice(0,14);
+        const slowRows = rows => rows
+          .filter(r => Number(r.slow_count || 0) > Number(r.hot_count || 0) && Number(r.slow_count || 0) > 0)
+          .sort((a,b) => Number(b.slow_count || 0) - Number(a.slow_count || 0))
+          .slice(0,14);
+        branch.categoryCardsByChannel = {};
+        branch.overviewHotByChannel = {};
+        branch.overviewSlowByChannel = {};
+        channels.forEach(ch => {
+          const chRules = rules.filter(r => (r.channel || '總') === ch);
+          branch.overviewHotByChannel[ch] = hotRows(chRules).map(r => ({feature:r.feature, count:r.hot_count}));
+          branch.overviewSlowByChannel[ch] = slowRows(chRules).map(r => ({feature:r.feature, count:r.slow_count}));
+          branch.categoryCardsByChannel[ch] = categories.map(cat => {
+            const base = {...(baseCards.get(cat) || {category:cat, items:0, qty:0})};
+            const catRules = chRules.filter(r => r.category === cat);
+            const counts = labelCounts[ch]?.[cat] || {hot:0, slow:0};
+            base.hotLabels = counts.hot;
+            base.slowLabels = counts.slow;
+            base.hotCount = counts.hot;
+            base.slowCount = counts.slow;
+            base.hotFactors = hotRows(catRules);
+            base.slowFactors = slowRows(catRules);
+            return base;
+          });
+        });
+        branch.categoryCards = branch.categoryCardsByChannel['總'] || branch.categoryCards || [];
+        branch.overviewHot = branch.overviewHotByChannel['總'] || branch.overviewHot || [];
+        branch.overviewSlow = branch.overviewSlowByChannel['總'] || branch.overviewSlow || [];
+      });
+    }
     function renderChannels() {
       const channels = activeBranch.channels || ['總','網路','門市'];
       if (!channels.includes(activeChannel)) activeChannel = '總';
@@ -925,6 +978,7 @@
         const res = await fetch('data/app_data.json', {cache:'no-store'});
         if (!res.ok) throw new Error('data/app_data.json 載入失敗');
         APP = await res.json();
+        normalizeLoadedData();
         activeBranch = APP.branches[0];
         renderAll();
       } catch (err) {
