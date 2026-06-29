@@ -355,21 +355,41 @@
       '百褶':['百褶','百摺','壓褶','打褶','褶皺','褶線'],
       '蕾絲':['蕾絲','蕾絲邊','蕾絲拼接','蕾絲材質'],
       '透膚':['透膚','透紗','薄紗','網紗'],
+      '空氣層':['空氣層','空氣層面料'],
       '蛋糕裙':['蛋糕','蛋糕裙','蛋糕短裙','蛋糕長裙'],
       '開衩':['開衩','開岔'],
-      '抽繩':['抽繩','抽繩設計']
+      '抽繩':['抽繩','抽繩設計'],
+      '不對稱':['不對稱','不對稱剪裁'],
+      '荷葉':['荷葉','荷葉邊'],
+      '蝴蝶結':['蝴蝶結','蝴蝶']
     };
     const NON_SCORING_FEATURES = new Set(['素色','純色','長洋裝','短洋裝','長裙','短裙','長版','短版','長袖','短袖','無袖','細肩帶','寬肩帶','肩帶']);
+    const PRIORITY_FEATURES = ['蕾絲','透膚','鏤空','綁帶','百褶','格紋','條紋','波點','空氣層','蛋糕裙','魚尾裙','開衩','抽繩','不對稱','荷葉','蝴蝶結'];
     function normalizeFeature(feature) {
       const text = String(feature || '').trim();
       if (!text) return '';
+      for (const canonical of PRIORITY_FEATURES) {
+        const words = FEATURE_NORMALIZE[canonical] || [canonical];
+        if (text === canonical || words.some(w => text.includes(w))) return canonical;
+      }
       for (const [canonical, words] of Object.entries(FEATURE_NORMALIZE)) {
         if (text === canonical || words.some(w => text.includes(w))) return canonical;
       }
       return text;
     }
+    function expandFeatureTokens(feature) {
+      const text = String(feature || '').trim();
+      if (!text) return [];
+      const hits = [];
+      for (const [canonical, words] of Object.entries(FEATURE_NORMALIZE)) {
+        if (text === canonical || words.some(w => text.includes(w))) hits.push(canonical);
+      }
+      const normalized = normalizeFeature(text);
+      if (normalized) hits.push(normalized);
+      return [...new Set(hits)];
+    }
     function normalizeFeatureList(list) {
-      return [...new Set((list || []).map(normalizeFeature).filter(Boolean))];
+      return [...new Set((list || []).flatMap(expandFeatureTokens).filter(Boolean))];
     }
     function isScoreableFeature(feature) {
       const f = normalizeFeature(feature);
@@ -526,6 +546,9 @@
     function wantsStrictLeather(q) {
       return /皮外套|皮衣|皮革外套|皮質外套|仿皮外套|PU外套/i.test(q);
     }
+    function wantsImage(q) {
+      return /有圖|圖片|款式圖|跟圖|附圖|看圖/.test(q);
+    }
     function isStrictLeatherOuterwear(x) {
       const name = `${x.name || ''} ${(x.features || []).join(' ')}`.toUpperCase();
       if (/皮草|麂皮|俏皮/.test(name)) return false;
@@ -555,7 +578,7 @@
       }
       const pickedBranches = APP.branches.filter(b => String(q || '').toUpperCase().includes(String(b.name).toUpperCase())).map(b => b.name);
       if (pickedBranches.length) out = out.filter(x => pickedBranches.includes(x.branch));
-      if (/有圖|圖片|款式圖/.test(q)) out = out.filter(x => x.imageUrl);
+      if (wantsImage(q)) out = out.filter(x => x.imageUrl);
       if (/銷量|總銷|累銷|高到低|排序/.test(q)) out.sort((a,b) => (b.sales_qty || b.total_qty || 0) - (a.sales_qty || a.total_qty || 0));
       const m = String(q || '').replace(/,/g, '').match(/(\d{2,7})\s*(件|以上|超過|大於|至少)?/);
       if (m) out = out.filter(x => Number(x.sales_qty || x.total_qty || 0) >= Number(m[1]));
@@ -568,6 +591,7 @@
       const qFeatures = queryFeatures(q);
       const rawFeatureWords = queryRawFeatureWords(q);
       const branches = queryBranches(q);
+      const requireImage = wantsImage(q);
       const rows = [];
       for (const branch of branches) {
         const cats = category ? [category] : branch.categories;
@@ -581,6 +605,7 @@
             const featureHits = qFeatures.filter(f => common.includes(f) || queryFeatureHit(f, text));
             if (qFeatures.length && featureHits.length < qFeatures.length) continue;
             if (rawFeatureWords.length && !rawFeatureWords.every(w => text.includes(w))) continue;
+            if (requireImage && !x.imageUrl) continue;
             rows.push({...x, branch: branch.name, common, sim: common.length * 5 + wordHits * 2 + Math.min(5, Math.floor((x.total_qty || 0) / 50))});
           }
         }
@@ -597,6 +622,7 @@
       const words = queryWords(q);
       const wantsLeather = /皮外套|皮衣|皮革|皮質|仿皮|PU/i.test(q);
       const strictLeather = wantsStrictLeather(q);
+      const requireImage = wantsImage(q);
       const rows = [];
       for (const branch of branches) {
         for (const x of branch.cumulativeItems || []) {
@@ -609,6 +635,7 @@
           const featureHits = qFeatures.filter(f => common.includes(f) || queryFeatureHit(f, text));
           if (qFeatures.length && featureHits.length < qFeatures.length) continue;
           if (rawFeatureWords.length && !rawFeatureWords.every(w => text.includes(w))) continue;
+          if (requireImage && !x.imageUrl) continue;
           const wordHits = words.filter(w => text.includes(w)).length;
           if ((!qFeatures.length && words.length) && !wordHits && !wantsLeather && !category && !threshold) continue;
           rows.push({...x, branch: branch.name, common, sim: common.length * 5 + wordHits * 2 + Math.min(20, Math.floor((x.sales_qty || 0) / 100))});
@@ -717,9 +744,14 @@
       if (/V領|方領|圓領|U領|一字領|平口|翻領|領型|領口|立領|桃心領/.test(text)) return '領型';
       if (/短袖|長袖|無袖|肩帶|細肩|寬肩|泡泡袖|落肩|削肩|袖型/.test(text)) return '';
       if (/合身|寬鬆|A字|直筒|窄管|寬褲|高腰|低腰|傘襬|魚尾|喇叭|版型|修身|寬版/.test(text)) return '版型';
-      if (/針織|蕾絲|雪紡|棉|牛仔|皮革|皮衣|緞面|透膚|毛呢|西裝|羅紋|網紗|材質|面料/.test(text)) return '材質/面料';
+      if (/針織|蕾絲|雪紡|棉|牛仔|皮革|皮衣|緞面|透膚|空氣層|毛呢|西裝|羅紋|網紗|材質|面料/.test(text)) return '材質/面料';
       if (/甜美|辣妹|休閒|簡約|正式|度假|歐美|韓系|法式|氣質|性感|風格/.test(text)) return '風格感';
       return '設計元素';
+    }
+    function aspectFromDetectedFeature(feature) {
+      const f = normalizeFeature(feature);
+      if (!isScoreableFeature(f)) return '';
+      return aspectFromRule({ tag_group:'', tag_subtype:'' }, f);
     }
     function scoreAspectRows(item) {
       const picked = new Map();
@@ -745,13 +777,18 @@
         const row = { aspect, feature:f, sign, points, hotCount, slowCount, totalCount, rate, reliability, countWeight };
         if (!current || row.points > current.points) picked.set(aspect, row);
       }
+      for (const f of normalizeFeatureList(item.features || [])) {
+        if (!isScoreableFeature(f)) continue;
+        const aspect = aspectFromDetectedFeature(f);
+        if (aspect && !picked.has(aspect)) picked.set(aspect, { aspect, feature:f, sign:0, points:0, hotCount:0, slowCount:0, totalCount:0, rate:0, reliability:0, countWeight:0, detectedOnly:true });
+      }
       return SCORE_ASPECTS.map(aspect => picked.get(aspect) || { aspect, feature:'未明顯命中', sign:0, points:0, hotCount:0, slowCount:0, totalCount:0, rate:0, reliability:0, countWeight:0 });
     }
     function scorePartHtml(rows) {
       return `<div class="scoreBreakdown">${rows.map(r => {
         const cls = r.sign > 0 ? 'hot' : r.sign < 0 ? 'slow' : 'neutral';
         const val = r.sign > 0 ? `+${r.points}` : r.sign < 0 ? `-${r.points}` : '0';
-        const meta = r.totalCount ? `<br><span>熱${r.hotCount} / 滯${r.slowCount}；可信${Math.round(r.reliability*100)}%</span>` : '';
+        const meta = r.totalCount ? `<br><span>熱${r.hotCount} / 滯${r.slowCount}；可信${Math.round(r.reliability*100)}%</span>` : (r.detectedOnly ? '<br><span>已辨識，未列入加扣分</span>' : '');
         return `<div class="scorePart ${cls}"><b>${esc(r.aspect)}</b><br>${esc(r.feature)} <span>${val}</span>${meta}</div>`;
       }).join('')}</div>`;
     }
@@ -821,7 +858,7 @@
           branchName: activeBranch.name,
           categories: activeBranch.categories,
           factorText: factors,
-          note: (els.note.value || '') + '\n請依七大面向辨識：設計元素、版型、領型、袖型/肩帶、材質/面料、風格感、圖案/花色。圖案/花色請特別看印花、條紋、格紋、素色、點點、豹紋、字母、LOGO。版型/褲型/腰型請特別看窄管、直筒、闊腿、喇叭、高腰、中腰、低腰、合身、寬鬆、短版、長版。若圖片是窄管褲，不可用寬褲/闊腿當類似款。',
+          note: (els.note.value || '') + '\n請依七大面向辨識，但評分重點只放在有設計辨識度的元素。必須仔細檢查：鏤空/簍空、綁帶/繫帶、透膚/透紗/薄紗/網紗、蕾絲/蕾絲邊、百褶/壓褶、格紋/條紋/波點/印花、魚尾、蛋糕裙、開衩、荷葉、不對稱、抽繩、空氣層面料、針織、羅紋、牛仔、皮革。洋裝版型請不要只寫合身，請判斷上合下寬、上合下合、上寬下寬或A字/魚尾/傘襬。短洋裝/長洋裝、短袖/長袖/無袖、素色/純色只能當描述，不可當主要評分元素。若圖片是罩衫，請特別判斷是否透膚、蕾絲、鏤空或針織。若圖片是襯衫，請特別判斷是否格紋、條紋、透膚、綁帶或剪裁設計。若圖片是窄管褲，不可用寬褲/闊腿當類似款。',
           imageDataUrl: item.dataUrl
         })
       });
