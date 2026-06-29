@@ -227,6 +227,10 @@
     };
     function esc(v) { return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
     function chip(row, type) { return `<span class="chip ${type}">${esc(row.feature)} <b>${row.count ?? row.hot_count ?? row.slow_count ?? ''}</b></span>`; }
+    function validFeatureName(feature) {
+      const text = String(feature || '').trim();
+      return text && !text.includes('?') && !text.includes('�');
+    }
     function renderBranch() {
       els.branches.innerHTML = APP.branches.map(b => `<button class="branch ${b.id===activeBranch.id?'active':''}" data-id="${b.id}">${esc(b.name)}</button>`).join('');
       els.branches.querySelectorAll('button').forEach(btn => btn.onclick = () => {
@@ -262,11 +266,11 @@
           if (String(label.label || '').includes('滯銷')) labelCounts[ch][cat].slow += 1;
         });
         const hotRows = rows => rows
-          .filter(r => Number(r.hot_count || 0) > Number(r.slow_count || 0) && Number(r.hot_count || 0) > 0)
+          .filter(r => validFeatureName(r.feature) && Number(r.hot_count || 0) > Number(r.slow_count || 0) && Number(r.hot_count || 0) > 0)
           .sort((a,b) => Number(b.hot_count || 0) - Number(a.hot_count || 0))
           .slice(0,14);
         const slowRows = rows => rows
-          .filter(r => Number(r.slow_count || 0) > Number(r.hot_count || 0) && Number(r.slow_count || 0) > 0)
+          .filter(r => validFeatureName(r.feature) && Number(r.slow_count || 0) > Number(r.hot_count || 0) && Number(r.slow_count || 0) > 0)
           .sort((a,b) => Number(b.slow_count || 0) - Number(a.slow_count || 0))
           .slice(0,14);
         branch.categoryCardsByChannel = {};
@@ -565,22 +569,22 @@
     function queryRawFeatureWords(q) {
       const known = new Set(Object.values(QUERY_FEATURES).flat().map(w => String(w).toUpperCase()));
       return String(q || '').toUpperCase()
-        .split(/\s+|，|,|。|有哪些|請問|可以|給我|找|的|總銷|累銷|銷售|銷量|超過|以上|大於|至少|元素|件|款|商品|品項|類|和|及|跟/)
+        .split(/\s+|，|,|。|有哪些|請問|可以|給我|找|的|總銷|累銷|銷售|銷量|超過|以上|大於|至少|元素|件|款|款號|商品|品項|類|圖片|跟圖|附圖|看圖|圖|和|及|跟/)
         .map(w => w.trim())
-        .filter(w => w.length >= 2 && !/^\d+$/.test(w) && !known.has(w) && !/^(AS|A\+|CA|OL|W\d+)$/.test(w));
+        .filter(w => w.length >= 2 && !/^\d+$/.test(w) && !known.has(w) && !/^(AS|A\+|CA|OL|W\d+|上衣|洋裝|裙子|裙|褲子|褲|外套|套裝|罩衫|襯衫|背心)$/.test(w));
     }
     function queryFeatureHit(feature, text) {
       return (QUERY_FEATURES[feature] || [feature]).some(w => text.includes(String(w).toUpperCase()));
     }
     function isCumulativeQuery(q) {
-      return /總銷|累銷|累計|銷售數量|銷售件數|銷量|超過|以上|大於|至少|件/.test(q) && !/四週|週|W\d+|滯銷|暢銷|熱銷/.test(q);
+      return /總銷|累銷|累計|銷售|銷售數量|銷售件數|銷量|超過|以上|大於|至少|件/.test(q) && !/四週|週|W\d+|滯銷|暢銷|熱銷/.test(q);
     }
     function queryThreshold(q) {
       const m = String(q || '').replace(/,/g, '').match(/(\d{2,7})\s*(件|以上|超過|大於|至少)?/);
       return m ? Number(m[1]) : 0;
     }
     function queryWords(q) {
-      return String(q || '').toUpperCase().split(/\s+|，|,|有哪些|請問|可以|給我|找|的|總銷|累銷|銷售|超過|以上|大於|至少|元素|件|款|支線|款號|圖片|跟圖|圖/).filter(w => w.length >= 2 && !/^\d+$/.test(w));
+      return String(q || '').toUpperCase().split(/\s+|，|,|有哪些|請問|可以|給我|找|的|總銷|累銷|銷售|超過|以上|大於|至少|元素|件|款|支線|款號|圖片|跟圖|附圖|看圖|圖/).filter(w => w.length >= 2 && !/^\d+$/.test(w) && !/^(AS|A\+|CA|OL|上衣|洋裝|裙子|裙|褲子|褲|外套|套裝)$/.test(w));
     }
     function chatImageHtml(x) {
       const src = x.imageUrl ? (APP.images?.[x.imageUrl] || x.imageUrl) : '';
