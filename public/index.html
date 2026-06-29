@@ -98,7 +98,7 @@
     .chatItem { display:grid; grid-template-columns:132px 1fr; gap:12px; border:1px solid var(--line); border-left:5px solid var(--nav2); border-radius:4px; padding:10px; background:#fffdf8; }
     .chatPic { width:132px; height:104px; border-radius:3px; background:linear-gradient(135deg,#e0dfdb,#fffdf8); border:1px solid #d0cfc6; object-fit:cover; display:grid; place-items:center; color:#625d58; font-size:12px; text-align:center; overflow:hidden; }
     .chatPic img { width:100%; height:100%; object-fit:cover; border-radius:3px; }
-    .chatAsk { display:grid; grid-template-columns:1fr 92px; gap:8px; }
+    .chatAsk { display:grid; grid-template-columns:1fr 92px 92px; gap:8px; }
     .empty { border:1px dashed var(--line); border-radius:4px; padding:28px; text-align:center; color:var(--muted); background:#fffdf8; }
     @media (max-width:1100px) { .app { grid-template-columns:1fr; } aside { position:static; } .uploadWorkspace,.uploadTools,.grid2,.catGrid { grid-template-columns:1fr; } .uploadPanel,.scoreGuide { grid-column:auto; grid-row:auto; position:static; } }
   </style>
@@ -196,6 +196,7 @@
             <div class="chatAsk">
               <input id="chatInput" type="text" placeholder="輸入問題，例如：總銷超過500件的皮外套有哪些" />
               <button id="chatBtn" type="button">詢問</button>
+              <button id="chatResetBtn" type="button" class="secondary">重問</button>
             </div>
           </div>
         </div>
@@ -221,7 +222,8 @@
       status: document.getElementById('status'),
       chatLog: document.getElementById('chatLog'),
       chatInput: document.getElementById('chatInput'),
-      chatBtn: document.getElementById('chatBtn')
+      chatBtn: document.getElementById('chatBtn'),
+      chatResetBtn: document.getElementById('chatResetBtn')
     };
     function esc(v) { return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
     function chip(row, type) { return `<span class="chip ${type}">${esc(row.feature)} <b>${row.count ?? row.hot_count ?? row.slow_count ?? ''}</b></span>`; }
@@ -331,11 +333,40 @@
     ];
     function rulesFor(category) { return activeBranch.rules.filter(r => r.category === category && r.channel === activeChannel && r.score_weight !== 0); }
     function featureAliases(feature) {
+      feature = normalizeFeature(feature);
       const words = new Set([feature]);
       for (const [group, vals] of Object.entries(QUERY_FEATURES)) {
         if (group === feature || vals.includes(feature)) vals.forEach(v => words.add(v));
       }
       return [...words];
+    }
+    const FEATURE_NORMALIZE = {
+      '綁帶':['綁帶','綁帶設計','後綁帶','繫帶','綁繩','綁結'],
+      '鏤空':['鏤空','簍空','鏤空設計','後鏤空','腰鏤空','挖空'],
+      '魚尾裙':['魚尾','魚尾裙','魚尾洋裝','魚尾長裙'],
+      '細肩帶':['細肩','細肩帶'],
+      '長洋裝':['長洋裝','長裙','長版洋裝'],
+      '短洋裝':['短洋裝','短版洋裝'],
+      '合身':['合身','修身','緊身'],
+      '素色':['素色','純色'],
+      '直紋':['直紋','直條','條紋']
+    };
+    function normalizeFeature(feature) {
+      const text = String(feature || '').trim();
+      if (!text) return '';
+      for (const [canonical, words] of Object.entries(FEATURE_NORMALIZE)) {
+        if (text === canonical || words.some(w => text.includes(w))) return canonical;
+      }
+      return text;
+    }
+    function normalizeFeatureList(list) {
+      return [...new Set((list || []).map(normalizeFeature).filter(Boolean))];
+    }
+    function localFeatureHints(item) {
+      const text = `${item.name || ''} ${item.title || ''} ${item.middleCategory || ''} ${item.summary || ''} ${(item.features || []).join(' ')}`;
+      return normalizeFeatureList(Object.entries(FEATURE_NORMALIZE)
+        .filter(([canonical, words]) => words.some(w => text.includes(w)))
+        .map(([canonical]) => canonical));
     }
     function itemText(x) { return `${x.code || ''} ${x.name || ''} ${x.title || ''} ${x.category || ''} ${x.middleCategory || ''} ${(x.features || []).join(' ')}`.toUpperCase(); }
     function styleType(x) {
@@ -366,7 +397,7 @@
       return featureAliases(feature).some(w => text.includes(String(w).toUpperCase()));
     }
     function conflictsWithItem(item, x) {
-      const a = new Set(item.features || []);
+      const a = new Set(normalizeFeatureList(item.features || []));
       const text = itemText(x);
       return CONFLICT_FEATURES.some(group => {
         const itemHas = group.filter(f => a.has(f) || featureMatches(f, item));
@@ -379,9 +410,9 @@
       const examples = activeBranch.labelExamples?.[item.category] || [];
       const factorCards = activeBranch.categoryCardsByChannel?.[activeChannel] || activeBranch.categoryCards || [];
       const card = factorCards.find(c => c.category === item.category);
-      const visibleFeatures = new Set([...(card?.hotFactors || []), ...(card?.slowFactors || [])].map(x => x.feature));
-      const scoreFeatures = (item.features || []).filter(f => {
-        const r = rulesFor(item.category).find(x => x.feature === f);
+      const visibleFeatures = new Set([...(card?.hotFactors || []), ...(card?.slowFactors || [])].map(x => normalizeFeature(x.feature)));
+      const scoreFeatures = normalizeFeatureList(item.features || []).filter(f => {
+        const r = rulesFor(item.category).find(x => normalizeFeature(x.feature) === f);
         return visibleFeatures.has(f) && r && aspectFromRule(r, f);
       });
       return examples
@@ -559,7 +590,7 @@
         for (const x of branch.cumulativeItems || []) {
           if (category && x.category !== category) continue;
           if (threshold && Number(x.sales_qty || 0) < threshold) continue;
-          const text = `${x.code} ${x.name} ${x.category} ${(x.features || []).join(' ')}`.toUpperCase();
+          const text = `${branch.name} ${x.code} ${x.name} ${x.category} ${(x.features || []).join(' ')}`.toUpperCase();
           if (strictLeather && !isStrictLeatherOuterwear(x)) continue;
           if (!strictLeather && wantsLeather && !/(皮|PU|仿皮|皮革|皮質)/i.test(text)) continue;
           const common = (x.features || []).filter(f => qFeatures.includes(f));
@@ -567,7 +598,7 @@
           if (qFeatures.length && featureHits.length < qFeatures.length) continue;
           if (rawFeatureWords.length && !rawFeatureWords.every(w => text.includes(w))) continue;
           const wordHits = words.filter(w => text.includes(w)).length;
-          if ((!qFeatures.length && words.length) && !wordHits && !wantsLeather) continue;
+          if ((!qFeatures.length && words.length) && !wordHits && !wantsLeather && !category && !threshold) continue;
           rows.push({...x, branch: branch.name, common, sim: common.length * 5 + wordHits * 2 + Math.min(20, Math.floor((x.sales_qty || 0) / 100))});
         }
       }
@@ -639,6 +670,15 @@
       els.chatLog.scrollTop = els.chatLog.scrollHeight;
       els.chatInput.value = '';
     }
+    function resetChat() {
+      chatMemory.lastRows = [];
+      chatMemory.lastQuestion = '';
+      chatMemory.lastMode = '';
+      chatMemory.lastScope = '全部支線';
+      els.chatLog.innerHTML = '<div class="chatMsg">已重新開始。可以直接問：AS 總銷500以上外套款號跟圖、全部支線熱銷外套、OL 滯銷洋裝。</div>';
+      els.chatInput.value = '';
+      els.chatInput.focus();
+    }
     const SCORE_ASPECTS = ['設計元素','版型','領型','材質/面料','風格感','圖案/花色'];
     function aspectFromRule(rule, feature) {
       const text = `${rule?.tag_group || ''} ${rule?.tag_subtype || ''} ${feature || ''}`.toUpperCase();
@@ -654,10 +694,11 @@
       const picked = new Map();
       const factorCards = activeBranch.categoryCardsByChannel?.[activeChannel] || activeBranch.categoryCards || [];
       const card = factorCards.find(c => c.category === item.category);
-      const visibleFeatures = new Set([...(card?.hotFactors || []), ...(card?.slowFactors || [])].map(x => x.feature));
-      for (const f of item.features || []) {
+      const visibleFeatures = new Set([...(card?.hotFactors || []), ...(card?.slowFactors || [])].map(x => normalizeFeature(x.feature)));
+      for (const rawFeature of item.features || []) {
+        const f = normalizeFeature(rawFeature);
         if (!visibleFeatures.has(f)) continue;
-        const r = rulesFor(item.category).find(x => x.feature === f);
+        const r = rulesFor(item.category).find(x => normalizeFeature(x.feature) === f);
         if (!r) continue;
         const aspect = aspectFromRule(r, f);
         if (!aspect) continue;
@@ -759,10 +800,11 @@
       const parsed = data;
       if (activeBranch.categories.includes(parsed.category)) item.category = parsed.category;
       const allowed = new Set(activeBranch.featuresByCategory[item.category] || []);
-      item.features = Array.isArray(parsed.features) ? parsed.features.filter(f => allowed.has(f) || f) : [];
+      item.features = normalizeFeatureList(Array.isArray(parsed.features) ? parsed.features : []);
       item.title = parsed.title || item.title;
       item.summary = parsed.summary || '';
       item.middleCategory = parsed.middleCategory || item.middleCategory || styleType(item);
+      item.features = normalizeFeatureList([...(item.features || []), ...localFeatureHints(item)]).filter(f => allowed.has(f) || f);
       item.source = 'AI分析';
       item.analyzed = true;
     }
@@ -809,6 +851,7 @@
     });
     document.getElementById('analyzeBtn').onclick = runAnalysis;
     els.chatBtn.onclick = askData;
+    els.chatResetBtn.onclick = resetChat;
     els.chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') askData(); });
     async function initApp() {
       try {
