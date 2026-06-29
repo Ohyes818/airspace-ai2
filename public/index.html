@@ -680,7 +680,8 @@
       for (const branch of branches) {
         for (const x of branch.cumulativeItems || []) {
           if (category && x.category !== category) continue;
-          if (!opts.ignoreThreshold && threshold && Number(x.sales_qty || 0) < threshold) continue;
+          const qtyValue = Number(x.sales_qty || x.current_year_qty || x.year_total_qty || x.total_qty || 0);
+          if (!opts.ignoreThreshold && threshold && qtyValue < threshold) continue;
           const text = `${branch.name} ${x.code} ${x.name} ${x.category} ${(x.features || []).join(' ')}`.toUpperCase();
           if (strictLeather && !isStrictLeatherOuterwear(x)) continue;
           if (!strictLeather && wantsLeather && !/(皮|PU|仿皮|皮革|皮質)/i.test(text)) continue;
@@ -691,7 +692,7 @@
           if (requireImage && !x.imageUrl) continue;
           const wordHits = words.filter(w => text.includes(w)).length;
           if ((!qFeatures.length && words.length) && !wordHits && !wantsLeather && !category && !threshold) continue;
-          rows.push({...x, branch: branch.name, common, sim: common.length * 5 + wordHits * 2 + Math.min(20, Math.floor((x.sales_qty || 0) / 100))});
+          rows.push({...x, branch: branch.name, common, sales_qty: qtyValue, sim: common.length * 5 + wordHits * 2 + Math.min(20, Math.floor(qtyValue / 100))});
         }
       }
       return rows.sort((a,b) => (b.sales_qty || 0) - (a.sales_qty || 0) || b.sim - a.sim).slice(0, 20);
@@ -748,7 +749,7 @@
       let rows = followUp ? refineRows(chatMemory.lastRows, q) : (cumulative ? findCumulativeExamples(q) : findExamples(q));
       const scope = followUp ? chatMemory.lastScope : branchScopeLabel(q);
       let relaxedIntro = '';
-      if (!rows.length && !followUp && cumulative && queryThreshold(q)) {
+      if (!rows.length && !followUp && cumulative && queryThreshold(q) && /放寬|附近|最高|接近/.test(q)) {
         const relaxedRows = findCumulativeExamples(q, { ignoreThreshold: true });
         if (relaxedRows.length) {
           rows = relaxedRows.slice(0, 12);
@@ -848,6 +849,7 @@
     function scoreItem(item) {
       let score = 5;
       const notes = [];
+      item.features = normalizeFeatureList([...(item.features || []), item.title || '', item.name || '', item.middleCategory || '']);
       const labels = (activeBranch.labelsByCode[item.code] || []).filter(x => !x.channel || x.channel === activeChannel);
       const aspectRows = scoreAspectRows(item);
       const hotAspectCount = aspectRows.filter(x => x.sign > 0).length;
@@ -915,7 +917,13 @@
           imageDataUrl: item.dataUrl
         })
       });
-      const data = await res.json();
+      const raw = await res.text();
+      let data = {};
+      try {
+        data = raw ? JSON.parse(raw) : {};
+      } catch {
+        throw new Error('AI 後端沒有正確回應 JSON。請確認 Render 是 Web Service，且 server.mjs、package.json 已上傳。');
+      }
       if (!res.ok) throw new Error(data.error || 'AI 分析失敗');
       const parsed = data;
       if (activeBranch.categories.includes(parsed.category)) item.category = parsed.category;
