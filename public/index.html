@@ -349,8 +349,17 @@
       '短洋裝':['短洋裝','短版洋裝'],
       '合身':['合身','修身','緊身'],
       '素色':['素色','純色'],
-      '直紋':['直紋','直條','條紋']
+      '條紋':['直紋','直條','條紋','橫條'],
+      '格紋':['格紋','格子','格子紋'],
+      '波點':['波點','圓點','點點'],
+      '百褶':['百褶','百摺','壓褶','打褶','褶皺','褶線'],
+      '蕾絲':['蕾絲','蕾絲邊','蕾絲拼接','蕾絲材質'],
+      '透膚':['透膚','透紗','薄紗','網紗'],
+      '蛋糕裙':['蛋糕','蛋糕裙','蛋糕短裙','蛋糕長裙'],
+      '開衩':['開衩','開岔'],
+      '抽繩':['抽繩','抽繩設計']
     };
+    const NON_SCORING_FEATURES = new Set(['素色','純色','長洋裝','短洋裝','長裙','短裙','長版','短版','長袖','短袖','無袖','細肩帶','寬肩帶','肩帶']);
     function normalizeFeature(feature) {
       const text = String(feature || '').trim();
       if (!text) return '';
@@ -361,6 +370,10 @@
     }
     function normalizeFeatureList(list) {
       return [...new Set((list || []).map(normalizeFeature).filter(Boolean))];
+    }
+    function isScoreableFeature(feature) {
+      const f = normalizeFeature(feature);
+      return Boolean(f) && !NON_SCORING_FEATURES.has(f);
     }
     function localFeatureHints(item) {
       const text = `${item.name || ''} ${item.title || ''} ${item.middleCategory || ''} ${item.summary || ''} ${(item.features || []).join(' ')}`;
@@ -408,12 +421,11 @@
     }
     function similarItems(item, labelText) {
       const examples = activeBranch.labelExamples?.[item.category] || [];
-      const factorCards = activeBranch.categoryCardsByChannel?.[activeChannel] || activeBranch.categoryCards || [];
-      const card = factorCards.find(c => c.category === item.category);
-      const visibleFeatures = new Set([...(card?.hotFactors || []), ...(card?.slowFactors || [])].map(x => normalizeFeature(x.feature)));
+      const ruleRows = rulesFor(item.category);
       const scoreFeatures = normalizeFeatureList(item.features || []).filter(f => {
-        const r = rulesFor(item.category).find(x => normalizeFeature(x.feature) === f);
-        return visibleFeatures.has(f) && r && aspectFromRule(r, f);
+        if (!isScoreableFeature(f)) return false;
+        const matchedRules = ruleRows.filter(x => normalizeFeature(x.feature) === f);
+        return matchedRules.length && aspectFromRule(mergeFeatureRules(matchedRules, f), f);
       });
       return examples
         .filter(x => String(x.label || '').includes(labelText) && x.code !== item.code && x.channel === activeChannel)
@@ -495,7 +507,7 @@
       return m ? Number(m[1]) : 0;
     }
     function queryWords(q) {
-      return String(q || '').toUpperCase().split(/\s+|，|,|有哪些|請問|可以|給我|找|的|總銷|累銷|銷售|超過|以上|大於|至少|元素|件|款/).filter(w => w.length >= 2 && !/^\d+$/.test(w));
+      return String(q || '').toUpperCase().split(/\s+|，|,|有哪些|請問|可以|給我|找|的|總銷|累銷|銷售|超過|以上|大於|至少|元素|件|款|支線|款號|圖片|跟圖|圖/).filter(w => w.length >= 2 && !/^\d+$/.test(w));
     }
     function chatImageHtml(x) {
       const src = x.imageUrl ? (APP.images?.[x.imageUrl] || x.imageUrl) : '';
@@ -575,7 +587,7 @@
       }
       return rows.sort((a,b) => b.sim - a.sim || (b.total_qty || 0) - (a.total_qty || 0)).slice(0, 12);
     }
-    function findCumulativeExamples(question) {
+    function findCumulativeExamples(question, opts = {}) {
       const q = String(question || '').trim();
       const category = queryCategory(q);
       const qFeatures = queryFeatures(q);
@@ -589,7 +601,7 @@
       for (const branch of branches) {
         for (const x of branch.cumulativeItems || []) {
           if (category && x.category !== category) continue;
-          if (threshold && Number(x.sales_qty || 0) < threshold) continue;
+          if (!opts.ignoreThreshold && threshold && Number(x.sales_qty || 0) < threshold) continue;
           const text = `${branch.name} ${x.code} ${x.name} ${x.category} ${(x.features || []).join(' ')}`.toUpperCase();
           if (strictLeather && !isStrictLeatherOuterwear(x)) continue;
           if (!strictLeather && wantsLeather && !/(皮|PU|仿皮|皮革|皮質)/i.test(text)) continue;
@@ -653,11 +665,19 @@
       els.chatLog.insertAdjacentHTML('beforeend', `<div class="chatMsg user">${esc(q)}</div>`);
       const followUp = isFollowUp(q);
       const cumulative = followUp ? chatMemory.lastMode === 'cumulative' : isCumulativeQuery(q);
-      const rows = followUp ? refineRows(chatMemory.lastRows, q) : (cumulative ? findCumulativeExamples(q) : findExamples(q));
+      let rows = followUp ? refineRows(chatMemory.lastRows, q) : (cumulative ? findCumulativeExamples(q) : findExamples(q));
       const scope = followUp ? chatMemory.lastScope : branchScopeLabel(q);
-      const intro = followUp
+      let relaxedIntro = '';
+      if (!rows.length && !followUp && cumulative && queryThreshold(q)) {
+        const relaxedRows = findCumulativeExamples(q, { ignoreThreshold: true });
+        if (relaxedRows.length) {
+          rows = relaxedRows.slice(0, 12);
+          relaxedIntro = `目前沒有完全符合「${queryThreshold(q).toLocaleString()}件以上」門檻的款式，先列出同條件下累銷最高的 ${rows.length} 款：`;
+        }
+      }
+      const intro = relaxedIntro || (followUp
         ? `依上一題結果繼續篩選，剩下 ${rows.length} 筆：`
-        : `依 ${scope} ${cumulative ? '累銷資料' : '歷史標籤'}，找到 ${rows.length} 筆：`;
+        : `依 ${scope} ${cumulative ? '累銷資料' : '歷史標籤'}，找到 ${rows.length} 筆：`);
       const categorySummary = (!rows.length && !followUp && !cumulative) ? findCategorySummary(q) : [];
       const resultHtml = categorySummary.length
         ? renderCategorySummary(categorySummary, q)
@@ -680,26 +700,36 @@
       els.chatInput.focus();
     }
     const SCORE_ASPECTS = ['設計元素','版型','領型','材質/面料','風格感','圖案/花色'];
+    function mergeFeatureRules(rows, feature) {
+      return rows.reduce((acc, r) => {
+        acc.hot_count += Number(r.hot_count || 0);
+        acc.slow_count += Number(r.slow_count || 0);
+        acc.tag_group += ` ${r.tag_group || ''}`;
+        acc.tag_subtype += ` ${r.tag_subtype || ''}`;
+        return acc;
+      }, { feature, hot_count:0, slow_count:0, tag_group:'', tag_subtype:'' });
+    }
     function aspectFromRule(rule, feature) {
+      const f = normalizeFeature(feature);
+      if (!isScoreableFeature(f)) return '';
       const text = `${rule?.tag_group || ''} ${rule?.tag_subtype || ''} ${feature || ''}`.toUpperCase();
-      if (/印花|圖案|條紋|格紋|素色|點點|豹紋|字母|LOGO|滿版|花色/.test(text)) return '圖案/花色';
+      if (/印花|圖案|條紋|格紋|波點|圓點|點點|豹紋|字母|LOGO|滿版|花色/.test(text)) return '圖案/花色';
       if (/V領|方領|圓領|U領|一字領|平口|翻領|領型|領口|立領|桃心領/.test(text)) return '領型';
       if (/短袖|長袖|無袖|肩帶|細肩|寬肩|泡泡袖|落肩|削肩|袖型/.test(text)) return '';
-      if (/短版|長版|合身|寬鬆|A字|直筒|窄管|寬褲|高腰|低腰|傘襬|魚尾|喇叭|版型|修身|寬版/.test(text)) return '版型';
+      if (/合身|寬鬆|A字|直筒|窄管|寬褲|高腰|低腰|傘襬|魚尾|喇叭|版型|修身|寬版/.test(text)) return '版型';
       if (/針織|蕾絲|雪紡|棉|牛仔|皮革|皮衣|緞面|透膚|毛呢|西裝|羅紋|網紗|材質|面料/.test(text)) return '材質/面料';
       if (/甜美|辣妹|休閒|簡約|正式|度假|歐美|韓系|法式|氣質|性感|風格/.test(text)) return '風格感';
       return '設計元素';
     }
     function scoreAspectRows(item) {
       const picked = new Map();
-      const factorCards = activeBranch.categoryCardsByChannel?.[activeChannel] || activeBranch.categoryCards || [];
-      const card = factorCards.find(c => c.category === item.category);
-      const visibleFeatures = new Set([...(card?.hotFactors || []), ...(card?.slowFactors || [])].map(x => normalizeFeature(x.feature)));
+      const ruleRows = rulesFor(item.category);
       for (const rawFeature of item.features || []) {
         const f = normalizeFeature(rawFeature);
-        if (!visibleFeatures.has(f)) continue;
-        const r = rulesFor(item.category).find(x => normalizeFeature(x.feature) === f);
-        if (!r) continue;
+        if (!isScoreableFeature(f)) continue;
+        const matchedRules = ruleRows.filter(x => normalizeFeature(x.feature) === f);
+        if (!matchedRules.length) continue;
+        const r = mergeFeatureRules(matchedRules, f);
         const aspect = aspectFromRule(r, f);
         if (!aspect) continue;
         const hotCount = Number(r.hot_count || 0);
