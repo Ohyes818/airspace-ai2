@@ -292,12 +292,10 @@
         });
         const hotRows = rows => rows
           .filter(r => validFeatureName(r.feature) && Number(r.hot_count || 0) > Number(r.slow_count || 0) && Number(r.hot_count || 0) > 0)
-          .sort((a,b) => Number(b.hot_count || 0) - Number(a.hot_count || 0))
-          .slice(0,14);
+          .sort((a,b) => Number(b.hot_count || 0) - Number(a.hot_count || 0));
         const slowRows = rows => rows
           .filter(r => validFeatureName(r.feature) && Number(r.slow_count || 0) > Number(r.hot_count || 0) && Number(r.slow_count || 0) > 0)
-          .sort((a,b) => Number(b.slow_count || 0) - Number(a.slow_count || 0))
-          .slice(0,14);
+          .sort((a,b) => Number(b.slow_count || 0) - Number(a.slow_count || 0));
         branch.categoryCardsByChannel = {};
         branch.overviewHotByChannel = {};
         branch.overviewSlowByChannel = {};
