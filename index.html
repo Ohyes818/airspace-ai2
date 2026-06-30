@@ -45,6 +45,7 @@
     .chip { display:inline-flex; gap:5px; align-items:center; border-radius:4px; padding:7px 9px; font-size:13px; background:#e0dfdb; color:#46381f; }
     .chip.hot { background:var(--hot); color:var(--hotText); }
     .chip.slow { background:var(--slow); color:var(--slowText); }
+    .showMoreBtn { background:#fffdf8; color:var(--nav2); border:1px solid var(--line); border-radius:4px; padding:7px 10px; font-size:13px; }
     .catGrid { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:14px; }
     .catHead { display:flex; justify-content:space-between; align-items:start; gap:12px; margin-bottom:10px; }
     .catHead h3 { font-size:20px; }
@@ -98,7 +99,7 @@
     .chatItem { display:grid; grid-template-columns:132px 1fr; gap:12px; border:1px solid var(--line); border-left:5px solid var(--nav2); border-radius:4px; padding:10px; background:#fffdf8; }
     .chatPic { width:132px; height:104px; border-radius:3px; background:linear-gradient(135deg,#e0dfdb,#fffdf8); border:1px solid #d0cfc6; object-fit:cover; display:grid; place-items:center; color:#625d58; font-size:12px; text-align:center; overflow:hidden; }
     .chatPic img { width:100%; height:100%; object-fit:cover; border-radius:3px; }
-    .chatAsk { display:grid; grid-template-columns:1fr 92px; gap:8px; }
+    .chatAsk { display:grid; grid-template-columns:1fr 92px 92px; gap:8px; }
     .empty { border:1px dashed var(--line); border-radius:4px; padding:28px; text-align:center; color:var(--muted); background:#fffdf8; }
     @media (max-width:1100px) { .app { grid-template-columns:1fr; } aside { position:static; } .uploadWorkspace,.uploadTools,.grid2,.catGrid { grid-template-columns:1fr; } .uploadPanel,.scoreGuide { grid-column:auto; grid-row:auto; position:static; } }
   </style>
@@ -196,6 +197,7 @@
             <div class="chatAsk">
               <input id="chatInput" type="text" placeholder="輸入問題，例如：總銷超過500件的皮外套有哪些" />
               <button id="chatBtn" type="button">詢問</button>
+              <button id="chatResetBtn" type="button" class="secondary">重問</button>
             </div>
           </div>
         </div>
@@ -207,6 +209,8 @@
     let activeBranch = null;
     let activeChannel = '總';
     const state = [];
+    const LABEL_PREVIEW_LIMIT = 40;
+    const labelExpanded = new Set();
     const chatMemory = { lastRows: [], lastQuestion: '', lastMode: '', lastScope: '全部支線' };
     const els = {
       branches: document.getElementById('branches'),
@@ -221,10 +225,37 @@
       status: document.getElementById('status'),
       chatLog: document.getElementById('chatLog'),
       chatInput: document.getElementById('chatInput'),
-      chatBtn: document.getElementById('chatBtn')
+      chatBtn: document.getElementById('chatBtn'),
+      chatResetBtn: document.getElementById('chatResetBtn')
     };
-    function esc(v) { return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+    function cleanText(v) {
+      return String(v ?? '').replace(/[�]+/g, '').replace(/\?{2,}/g, '').replace(/\s{2,}/g, ' ').trim();
+    }
+    function esc(v) { return cleanText(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
     function chip(row, type) { return `<span class="chip ${type}">${esc(row.feature)} <b>${row.count ?? row.hot_count ?? row.slow_count ?? ''}</b></span>`; }
+    function labelToggleKey(scope, type) {
+      return `${activeBranch?.name || ''}|${activeChannel}|${scope}|${type}`;
+    }
+    window.toggleLabels = function(key) {
+      if (labelExpanded.has(key)) labelExpanded.delete(key);
+      else labelExpanded.add(key);
+      renderFactors();
+    };
+    function renderLabelChips(rows, type, key) {
+      const list = Array.isArray(rows) ? rows : [];
+      if (!list.length) return '<span class="small">暫無資料</span>';
+      const expanded = labelExpanded.has(key);
+      const visible = expanded ? list : list.slice(0, LABEL_PREVIEW_LIMIT);
+      const chips = visible.map(r => chip(r, type)).join('');
+      if (list.length <= LABEL_PREVIEW_LIMIT) return chips;
+      const safeKey = encodeURIComponent(key);
+      const label = expanded ? '收合' : `顯示更多 +${list.length - LABEL_PREVIEW_LIMIT}`;
+      return `${chips}<button class="showMoreBtn" type="button" onclick="toggleLabels(decodeURIComponent('${safeKey}'))">${label}</button>`;
+    }
+    function validFeatureName(feature) {
+      const text = String(feature || '').trim();
+      return text && !text.includes('?') && !text.includes('�');
+    }
     function renderBranch() {
       els.branches.innerHTML = APP.branches.map(b => `<button class="branch ${b.id===activeBranch.id?'active':''}" data-id="${b.id}">${esc(b.name)}</button>`).join('');
       els.branches.querySelectorAll('button').forEach(btn => btn.onclick = () => {
@@ -238,6 +269,59 @@
     }
     function channelLabel(c) {
       return c === '總' ? '總(網路+門市)' : c;
+    }
+    function normalizeLoadedData() {
+      if (!APP || !Array.isArray(APP.branches)) return;
+      APP.dataVersion = APP.dataVersion || `資料修正版 ${new Date().toLocaleString('zh-TW')}`;
+      APP.branches.forEach(branch => {
+        const channels = branch.channels || ['總','網路','門市'];
+        const categories = branch.categories || [];
+        const rules = branch.rules || [];
+        const baseCards = new Map((branch.categoryCards || []).map(c => [c.category, c]));
+        const labelCounts = {};
+        channels.forEach(ch => {
+          labelCounts[ch] = {};
+          categories.forEach(cat => labelCounts[ch][cat] = {hot:0, slow:0});
+        });
+        Object.values(branch.labelsByCode || {}).flat().forEach(label => {
+          const ch = label.channel || '總';
+          const cat = label.category;
+          if (!labelCounts[ch] || !labelCounts[ch][cat]) return;
+          if (String(label.label || '').includes('暢銷')) labelCounts[ch][cat].hot += 1;
+          if (String(label.label || '').includes('滯銷')) labelCounts[ch][cat].slow += 1;
+        });
+        const hotRows = rows => rows
+          .filter(r => validFeatureName(r.feature) && Number(r.hot_count || 0) > Number(r.slow_count || 0) && Number(r.hot_count || 0) > 0)
+          .sort((a,b) => Number(b.hot_count || 0) - Number(a.hot_count || 0))
+          .slice(0,14);
+        const slowRows = rows => rows
+          .filter(r => validFeatureName(r.feature) && Number(r.slow_count || 0) > Number(r.hot_count || 0) && Number(r.slow_count || 0) > 0)
+          .sort((a,b) => Number(b.slow_count || 0) - Number(a.slow_count || 0))
+          .slice(0,14);
+        branch.categoryCardsByChannel = {};
+        branch.overviewHotByChannel = {};
+        branch.overviewSlowByChannel = {};
+        channels.forEach(ch => {
+          const chRules = rules.filter(r => (r.channel || '總') === ch);
+          branch.overviewHotByChannel[ch] = hotRows(chRules).map(r => ({feature:r.feature, count:r.hot_count}));
+          branch.overviewSlowByChannel[ch] = slowRows(chRules).map(r => ({feature:r.feature, count:r.slow_count}));
+          branch.categoryCardsByChannel[ch] = categories.map(cat => {
+            const base = {...(baseCards.get(cat) || {category:cat, items:0, qty:0})};
+            const catRules = chRules.filter(r => r.category === cat);
+            const counts = labelCounts[ch]?.[cat] || {hot:0, slow:0};
+            base.hotLabels = counts.hot;
+            base.slowLabels = counts.slow;
+            base.hotCount = counts.hot;
+            base.slowCount = counts.slow;
+            base.hotFactors = hotRows(catRules);
+            base.slowFactors = slowRows(catRules);
+            return base;
+          });
+        });
+        branch.categoryCards = branch.categoryCardsByChannel['總'] || branch.categoryCards || [];
+        branch.overviewHot = branch.overviewHotByChannel['總'] || branch.overviewHot || [];
+        branch.overviewSlow = branch.overviewSlowByChannel['總'] || branch.overviewSlow || [];
+      });
     }
     function renderChannels() {
       const channels = activeBranch.channels || ['總','網路','門市'];
@@ -264,8 +348,9 @@
       const slow = selected === '全部品類'
         ? (activeBranch.overviewSlowByChannel?.[activeChannel] || activeBranch.overviewSlow || [])
         : (cards[0]?.slowFactors || []).map(r => ({ feature:r.feature, count:r.slow_count }));
-      els.overallHot.innerHTML = hot.map(r => chip(r, 'hot')).join('') || '<span class="small">暫無資料</span>';
-      els.overallSlow.innerHTML = slow.map(r => chip(r, 'slow')).join('') || '<span class="small">暫無資料</span>';
+      const scope = selected === '全部品類' ? '總覽' : selected;
+      els.overallHot.innerHTML = renderLabelChips(hot, 'hot', labelToggleKey(`overall:${scope}`, 'hot'));
+      els.overallSlow.innerHTML = renderLabelChips(slow, 'slow', labelToggleKey(`overall:${scope}`, 'slow'));
       els.categoryCards.innerHTML = cards.map(c => `
         <article class="catCard">
           <div class="catHead">
@@ -273,8 +358,8 @@
             <div class="small">熱銷 ${c.hotLabels}<br>滯銷 ${c.slowLabels}</div>
           </div>
           <div class="labelCols">
-            <div><div class="subhead">熱銷標籤</div><div class="chips">${c.hotFactors.map(r => `<span class="chip hot">${esc(r.feature)} ${r.hot_count}</span>`).join('') || '<span class="small">暫無</span>'}</div></div>
-            <div><div class="subhead">滯銷標籤</div><div class="chips">${c.slowFactors.map(r => `<span class="chip slow">${esc(r.feature)} ${r.slow_count}</span>`).join('') || '<span class="small">暫無</span>'}</div></div>
+            <div><div class="subhead">熱銷標籤</div><div class="chips">${renderLabelChips(c.hotFactors, 'hot', labelToggleKey(`card:${c.category}`, 'hot'))}</div></div>
+            <div><div class="subhead">滯銷標籤</div><div class="chips">${renderLabelChips(c.slowFactors, 'slow', labelToggleKey(`card:${c.category}`, 'slow'))}</div></div>
           </div>
         </article>`).join('');
     }
@@ -331,11 +416,73 @@
     ];
     function rulesFor(category) { return activeBranch.rules.filter(r => r.category === category && r.channel === activeChannel && r.score_weight !== 0); }
     function featureAliases(feature) {
+      feature = normalizeFeature(feature);
       const words = new Set([feature]);
       for (const [group, vals] of Object.entries(QUERY_FEATURES)) {
         if (group === feature || vals.includes(feature)) vals.forEach(v => words.add(v));
       }
       return [...words];
+    }
+    const FEATURE_NORMALIZE = {
+      '綁帶':['綁帶','綁帶設計','後綁帶','繫帶','綁繩','綁結'],
+      '鏤空':['鏤空','簍空','鏤空設計','後鏤空','腰鏤空','挖空'],
+      '魚尾裙':['魚尾','魚尾裙','魚尾洋裝','魚尾長裙'],
+      '細肩帶':['細肩','細肩帶'],
+      '長洋裝':['長洋裝','長裙','長版洋裝'],
+      '短洋裝':['短洋裝','短版洋裝'],
+      '合身':['合身','修身','緊身'],
+      '素色':['素色','純色'],
+      '條紋':['直紋','直條','條紋','橫條'],
+      '格紋':['格紋','格子','格子紋'],
+      '波點':['波點','圓點','點點'],
+      '百褶':['百褶','百摺','壓褶','打褶','褶皺','褶線'],
+      '蕾絲':['蕾絲','蕾絲邊','蕾絲拼接','蕾絲材質'],
+      '透膚':['透膚','透紗','薄紗','網紗'],
+      '空氣層':['空氣層','空氣層面料'],
+      '蛋糕裙':['蛋糕','蛋糕裙','蛋糕短裙','蛋糕長裙'],
+      '開衩':['開衩','開岔'],
+      '抽繩':['抽繩','抽繩設計'],
+      '不對稱':['不對稱','不對稱剪裁'],
+      '荷葉':['荷葉','荷葉邊'],
+      '蝴蝶結':['蝴蝶結','蝴蝶']
+    };
+    const NON_SCORING_FEATURES = new Set(['素色','純色','長洋裝','短洋裝','長裙','短裙','長版','短版','長袖','短袖','無袖','細肩帶','寬肩帶','肩帶']);
+    const PRIORITY_FEATURES = ['蕾絲','透膚','鏤空','綁帶','百褶','格紋','條紋','波點','空氣層','蛋糕裙','魚尾裙','開衩','抽繩','不對稱','荷葉','蝴蝶結'];
+    function normalizeFeature(feature) {
+      const text = String(feature || '').trim();
+      if (!text) return '';
+      for (const canonical of PRIORITY_FEATURES) {
+        const words = FEATURE_NORMALIZE[canonical] || [canonical];
+        if (text === canonical || words.some(w => text.includes(w))) return canonical;
+      }
+      for (const [canonical, words] of Object.entries(FEATURE_NORMALIZE)) {
+        if (text === canonical || words.some(w => text.includes(w))) return canonical;
+      }
+      return text;
+    }
+    function expandFeatureTokens(feature) {
+      const text = String(feature || '').trim();
+      if (!text) return [];
+      const hits = [];
+      for (const [canonical, words] of Object.entries(FEATURE_NORMALIZE)) {
+        if (text === canonical || words.some(w => text.includes(w))) hits.push(canonical);
+      }
+      const normalized = normalizeFeature(text);
+      if (normalized) hits.push(normalized);
+      return [...new Set(hits)];
+    }
+    function normalizeFeatureList(list) {
+      return [...new Set((list || []).flatMap(expandFeatureTokens).filter(Boolean))];
+    }
+    function isScoreableFeature(feature) {
+      const f = normalizeFeature(feature);
+      return Boolean(f) && !NON_SCORING_FEATURES.has(f);
+    }
+    function localFeatureHints(item) {
+      const text = `${item.name || ''} ${item.title || ''} ${item.middleCategory || ''} ${item.summary || ''} ${(item.features || []).join(' ')}`;
+      return normalizeFeatureList(Object.entries(FEATURE_NORMALIZE)
+        .filter(([canonical, words]) => words.some(w => text.includes(w)))
+        .map(([canonical]) => canonical));
     }
     function itemText(x) { return `${x.code || ''} ${x.name || ''} ${x.title || ''} ${x.category || ''} ${x.middleCategory || ''} ${(x.features || []).join(' ')}`.toUpperCase(); }
     function styleType(x) {
@@ -366,7 +513,7 @@
       return featureAliases(feature).some(w => text.includes(String(w).toUpperCase()));
     }
     function conflictsWithItem(item, x) {
-      const a = new Set(item.features || []);
+      const a = new Set(normalizeFeatureList(item.features || []));
       const text = itemText(x);
       return CONFLICT_FEATURES.some(group => {
         const itemHas = group.filter(f => a.has(f) || featureMatches(f, item));
@@ -377,12 +524,11 @@
     }
     function similarItems(item, labelText) {
       const examples = activeBranch.labelExamples?.[item.category] || [];
-      const factorCards = activeBranch.categoryCardsByChannel?.[activeChannel] || activeBranch.categoryCards || [];
-      const card = factorCards.find(c => c.category === item.category);
-      const visibleFeatures = new Set([...(card?.hotFactors || []), ...(card?.slowFactors || [])].map(x => x.feature));
-      const scoreFeatures = (item.features || []).filter(f => {
-        const r = rulesFor(item.category).find(x => x.feature === f);
-        return visibleFeatures.has(f) && r && aspectFromRule(r, f);
+      const ruleRows = rulesFor(item.category);
+      const scoreFeatures = normalizeFeatureList(item.features || []).filter(f => {
+        if (!isScoreableFeature(f)) return false;
+        const matchedRules = ruleRows.filter(x => normalizeFeature(x.feature) === f);
+        return matchedRules.length && aspectFromRule(mergeFeatureRules(matchedRules, f), f);
       });
       return examples
         .filter(x => String(x.label || '').includes(labelText) && x.code !== item.code && x.channel === activeChannel)
@@ -449,22 +595,22 @@
     function queryRawFeatureWords(q) {
       const known = new Set(Object.values(QUERY_FEATURES).flat().map(w => String(w).toUpperCase()));
       return String(q || '').toUpperCase()
-        .split(/\s+|，|,|。|有哪些|請問|可以|給我|找|的|總銷|累銷|銷售|銷量|超過|以上|大於|至少|元素|件|款|商品|品項|類|和|及|跟/)
+        .split(/\s+|，|,|。|有哪些|請問|可以|給我|找|的|總銷|累銷|銷售|銷量|超過|以上|大於|至少|元素|件|款|款號|商品|品項|類|圖片|跟圖|附圖|看圖|圖|和|及|跟/)
         .map(w => w.trim())
-        .filter(w => w.length >= 2 && !/^\d+$/.test(w) && !known.has(w) && !/^(AS|A\+|CA|OL|W\d+)$/.test(w));
+        .filter(w => w.length >= 2 && !/^\d+$/.test(w) && !known.has(w) && !/^(AS|A\+|CA|OL|W\d+|上衣|洋裝|裙子|裙|褲子|褲|外套|套裝|罩衫|襯衫|背心)$/.test(w));
     }
     function queryFeatureHit(feature, text) {
       return (QUERY_FEATURES[feature] || [feature]).some(w => text.includes(String(w).toUpperCase()));
     }
     function isCumulativeQuery(q) {
-      return /總銷|累銷|累計|銷售數量|銷售件數|銷量|超過|以上|大於|至少|件/.test(q) && !/四週|週|W\d+|滯銷|暢銷|熱銷/.test(q);
+      return /總銷|累銷|累計|銷售|銷售數量|銷售件數|銷量|超過|以上|大於|至少|件/.test(q) && !/四週|週|W\d+|滯銷|暢銷|熱銷/.test(q);
     }
     function queryThreshold(q) {
       const m = String(q || '').replace(/,/g, '').match(/(\d{2,7})\s*(件|以上|超過|大於|至少)?/);
       return m ? Number(m[1]) : 0;
     }
     function queryWords(q) {
-      return String(q || '').toUpperCase().split(/\s+|，|,|有哪些|請問|可以|給我|找|的|總銷|累銷|銷售|超過|以上|大於|至少|元素|件|款/).filter(w => w.length >= 2 && !/^\d+$/.test(w));
+      return String(q || '').toUpperCase().split(/\s+|，|,|有哪些|請問|可以|給我|找|的|總銷|累銷|銷售|超過|以上|大於|至少|元素|件|款|支線|款號|圖片|跟圖|附圖|看圖|圖/).filter(w => w.length >= 2 && !/^\d+$/.test(w) && !/^(AS|A\+|CA|OL|上衣|洋裝|裙子|裙|褲子|褲|外套|套裝)$/.test(w));
     }
     function chatImageHtml(x) {
       const src = x.imageUrl ? (APP.images?.[x.imageUrl] || x.imageUrl) : '';
@@ -482,6 +628,9 @@
     }
     function wantsStrictLeather(q) {
       return /皮外套|皮衣|皮革外套|皮質外套|仿皮外套|PU外套/i.test(q);
+    }
+    function wantsImage(q) {
+      return /有圖|圖片|款式圖|跟圖|附圖|看圖/.test(q);
     }
     function isStrictLeatherOuterwear(x) {
       const name = `${x.name || ''} ${(x.features || []).join(' ')}`.toUpperCase();
@@ -512,7 +661,7 @@
       }
       const pickedBranches = APP.branches.filter(b => String(q || '').toUpperCase().includes(String(b.name).toUpperCase())).map(b => b.name);
       if (pickedBranches.length) out = out.filter(x => pickedBranches.includes(x.branch));
-      if (/有圖|圖片|款式圖/.test(q)) out = out.filter(x => x.imageUrl);
+      if (wantsImage(q)) out = out.filter(x => x.imageUrl);
       if (/銷量|總銷|累銷|高到低|排序/.test(q)) out.sort((a,b) => (b.sales_qty || b.total_qty || 0) - (a.sales_qty || a.total_qty || 0));
       const m = String(q || '').replace(/,/g, '').match(/(\d{2,7})\s*(件|以上|超過|大於|至少)?/);
       if (m) out = out.filter(x => Number(x.sales_qty || x.total_qty || 0) >= Number(m[1]));
@@ -525,6 +674,7 @@
       const qFeatures = queryFeatures(q);
       const rawFeatureWords = queryRawFeatureWords(q);
       const branches = queryBranches(q);
+      const requireImage = wantsImage(q);
       const rows = [];
       for (const branch of branches) {
         const cats = category ? [category] : branch.categories;
@@ -538,13 +688,14 @@
             const featureHits = qFeatures.filter(f => common.includes(f) || queryFeatureHit(f, text));
             if (qFeatures.length && featureHits.length < qFeatures.length) continue;
             if (rawFeatureWords.length && !rawFeatureWords.every(w => text.includes(w))) continue;
+            if (requireImage && !x.imageUrl) continue;
             rows.push({...x, branch: branch.name, common, sim: common.length * 5 + wordHits * 2 + Math.min(5, Math.floor((x.total_qty || 0) / 50))});
           }
         }
       }
       return rows.sort((a,b) => b.sim - a.sim || (b.total_qty || 0) - (a.total_qty || 0)).slice(0, 12);
     }
-    function findCumulativeExamples(question) {
+    function findCumulativeExamples(question, opts = {}) {
       const q = String(question || '').trim();
       const category = queryCategory(q);
       const qFeatures = queryFeatures(q);
@@ -554,21 +705,24 @@
       const words = queryWords(q);
       const wantsLeather = /皮外套|皮衣|皮革|皮質|仿皮|PU/i.test(q);
       const strictLeather = wantsStrictLeather(q);
+      const requireImage = wantsImage(q);
       const rows = [];
       for (const branch of branches) {
         for (const x of branch.cumulativeItems || []) {
           if (category && x.category !== category) continue;
-          if (threshold && Number(x.sales_qty || 0) < threshold) continue;
-          const text = `${x.code} ${x.name} ${x.category} ${(x.features || []).join(' ')}`.toUpperCase();
+          const qtyValue = Number(x.sales_qty || x.current_year_qty || x.year_total_qty || x.total_qty || 0);
+          if (!opts.ignoreThreshold && threshold && qtyValue < threshold) continue;
+          const text = `${branch.name} ${x.code} ${x.name} ${x.category} ${(x.features || []).join(' ')}`.toUpperCase();
           if (strictLeather && !isStrictLeatherOuterwear(x)) continue;
           if (!strictLeather && wantsLeather && !/(皮|PU|仿皮|皮革|皮質)/i.test(text)) continue;
           const common = (x.features || []).filter(f => qFeatures.includes(f));
           const featureHits = qFeatures.filter(f => common.includes(f) || queryFeatureHit(f, text));
           if (qFeatures.length && featureHits.length < qFeatures.length) continue;
           if (rawFeatureWords.length && !rawFeatureWords.every(w => text.includes(w))) continue;
+          if (requireImage && !x.imageUrl) continue;
           const wordHits = words.filter(w => text.includes(w)).length;
-          if ((!qFeatures.length && words.length) && !wordHits && !wantsLeather) continue;
-          rows.push({...x, branch: branch.name, common, sim: common.length * 5 + wordHits * 2 + Math.min(20, Math.floor((x.sales_qty || 0) / 100))});
+          if ((!qFeatures.length && words.length) && !wordHits && !wantsLeather && !category && !threshold) continue;
+          rows.push({...x, branch: branch.name, common, sales_qty: qtyValue, sim: common.length * 5 + wordHits * 2 + Math.min(20, Math.floor(qtyValue / 100))});
         }
       }
       return rows.sort((a,b) => (b.sales_qty || 0) - (a.sales_qty || 0) || b.sim - a.sim).slice(0, 20);
@@ -592,18 +746,53 @@
       }).join('');
       return `<div><b>${title}</b><br>${intro}</div><div class="chatResults">${cards}</div><div class="small">可以接著追問：只看AS、不要皮草、只列有圖、銷量排序、給我前5款。</div>`;
     }
+    function findCategorySummary(question) {
+      const q = String(question || '').trim();
+      const category = queryCategory(q);
+      if (!category) return [];
+      const rows = [];
+      for (const branch of queryBranches(q)) {
+        const cards = branch.categoryCardsByChannel?.[activeChannel] || branch.categoryCards || [];
+        const card = cards.find(c => c.category === category);
+        if (card) rows.push({branch: branch.name, card});
+      }
+      return rows;
+    }
+    function renderCategorySummary(rows, q) {
+      const wantsSlow = /滯銷|皛舫|銝|銝/.test(q);
+      return rows.map(row => {
+        const card = row.card;
+        const primary = wantsSlow ? card.slowFactors : card.hotFactors;
+        const secondary = wantsSlow ? card.hotFactors : card.slowFactors;
+        return `<div><b>${esc(row.branch)} / ${esc(card.category)} ${wantsSlow ? '滯銷標籤' : '熱銷標籤'}</b>
+          <div class="small">${Number(card.items || 0).toLocaleString()} 款 / ${Number(card.qty || 0).toLocaleString()} 件</div>
+          <div class="tags">${primary.slice(0,12).map(x => `<span class="tag">${esc(x.feature)} ${x.hot_count || x.slow_count || x.count || ''}</span>`).join('')}</div>
+          <div class="small">對照參考：${secondary.slice(0,8).map(x => esc(x.feature)).join('、')}</div></div>`;
+      }).join('');
+    }
     function askData() {
       const q = els.chatInput.value.trim();
       if (!q) return;
       els.chatLog.insertAdjacentHTML('beforeend', `<div class="chatMsg user">${esc(q)}</div>`);
       const followUp = isFollowUp(q);
       const cumulative = followUp ? chatMemory.lastMode === 'cumulative' : isCumulativeQuery(q);
-      const rows = followUp ? refineRows(chatMemory.lastRows, q) : (cumulative ? findCumulativeExamples(q) : findExamples(q));
+      let rows = followUp ? refineRows(chatMemory.lastRows, q) : (cumulative ? findCumulativeExamples(q) : findExamples(q));
       const scope = followUp ? chatMemory.lastScope : branchScopeLabel(q);
-      const intro = followUp
+      let relaxedIntro = '';
+      if (!rows.length && !followUp && cumulative && queryThreshold(q) && /放寬|附近|最高|接近/.test(q)) {
+        const relaxedRows = findCumulativeExamples(q, { ignoreThreshold: true });
+        if (relaxedRows.length) {
+          rows = relaxedRows.slice(0, 12);
+          relaxedIntro = `目前沒有完全符合「${queryThreshold(q).toLocaleString()}件以上」門檻的款式，先列出同條件下累銷最高的 ${rows.length} 款：`;
+        }
+      }
+      const intro = relaxedIntro || (followUp
         ? `依上一題結果繼續篩選，剩下 ${rows.length} 筆：`
-        : `依 ${scope} ${cumulative ? '累銷資料' : '歷史標籤'}，找到 ${rows.length} 筆：`;
-      const resultHtml = renderChatRows(rows, cumulative ? 'cumulative' : 'label', q, intro);
+        : `依 ${scope} ${cumulative ? '累銷資料' : '歷史標籤'}，找到 ${rows.length} 筆：`);
+      const categorySummary = (!rows.length && !followUp && !cumulative) ? findCategorySummary(q) : [];
+      const resultHtml = categorySummary.length
+        ? renderCategorySummary(categorySummary, q)
+        : renderChatRows(rows, cumulative ? 'cumulative' : 'label', q, intro);
       chatMemory.lastRows = rows;
       chatMemory.lastQuestion = q;
       chatMemory.lastMode = cumulative ? 'cumulative' : 'label';
@@ -612,26 +801,51 @@
       els.chatLog.scrollTop = els.chatLog.scrollHeight;
       els.chatInput.value = '';
     }
+    function resetChat() {
+      chatMemory.lastRows = [];
+      chatMemory.lastQuestion = '';
+      chatMemory.lastMode = '';
+      chatMemory.lastScope = '全部支線';
+      els.chatLog.innerHTML = '<div class="chatMsg">已重新開始。可以直接問：AS 總銷500以上外套款號跟圖、全部支線熱銷外套、OL 滯銷洋裝。</div>';
+      els.chatInput.value = '';
+      els.chatInput.focus();
+    }
     const SCORE_ASPECTS = ['設計元素','版型','領型','材質/面料','風格感','圖案/花色'];
+    function mergeFeatureRules(rows, feature) {
+      return rows.reduce((acc, r) => {
+        acc.hot_count += Number(r.hot_count || 0);
+        acc.slow_count += Number(r.slow_count || 0);
+        acc.tag_group += ` ${r.tag_group || ''}`;
+        acc.tag_subtype += ` ${r.tag_subtype || ''}`;
+        return acc;
+      }, { feature, hot_count:0, slow_count:0, tag_group:'', tag_subtype:'' });
+    }
     function aspectFromRule(rule, feature) {
+      const f = normalizeFeature(feature);
+      if (!isScoreableFeature(f)) return '';
       const text = `${rule?.tag_group || ''} ${rule?.tag_subtype || ''} ${feature || ''}`.toUpperCase();
-      if (/印花|圖案|條紋|格紋|素色|點點|豹紋|字母|LOGO|滿版|花色/.test(text)) return '圖案/花色';
+      if (/印花|圖案|條紋|格紋|波點|圓點|點點|豹紋|字母|LOGO|滿版|花色/.test(text)) return '圖案/花色';
       if (/V領|方領|圓領|U領|一字領|平口|翻領|領型|領口|立領|桃心領/.test(text)) return '領型';
       if (/短袖|長袖|無袖|肩帶|細肩|寬肩|泡泡袖|落肩|削肩|袖型/.test(text)) return '';
-      if (/短版|長版|合身|寬鬆|A字|直筒|窄管|寬褲|高腰|低腰|傘襬|魚尾|喇叭|版型|修身|寬版/.test(text)) return '版型';
-      if (/針織|蕾絲|雪紡|棉|牛仔|皮革|皮衣|緞面|透膚|毛呢|西裝|羅紋|網紗|材質|面料/.test(text)) return '材質/面料';
+      if (/合身|寬鬆|A字|直筒|窄管|寬褲|高腰|低腰|傘襬|魚尾|喇叭|版型|修身|寬版/.test(text)) return '版型';
+      if (/針織|蕾絲|雪紡|棉|牛仔|皮革|皮衣|緞面|透膚|空氣層|毛呢|西裝|羅紋|網紗|材質|面料/.test(text)) return '材質/面料';
       if (/甜美|辣妹|休閒|簡約|正式|度假|歐美|韓系|法式|氣質|性感|風格/.test(text)) return '風格感';
       return '設計元素';
     }
+    function aspectFromDetectedFeature(feature) {
+      const f = normalizeFeature(feature);
+      if (!isScoreableFeature(f)) return '';
+      return aspectFromRule({ tag_group:'', tag_subtype:'' }, f);
+    }
     function scoreAspectRows(item) {
       const picked = new Map();
-      const factorCards = activeBranch.categoryCardsByChannel?.[activeChannel] || activeBranch.categoryCards || [];
-      const card = factorCards.find(c => c.category === item.category);
-      const visibleFeatures = new Set([...(card?.hotFactors || []), ...(card?.slowFactors || [])].map(x => x.feature));
-      for (const f of item.features || []) {
-        if (!visibleFeatures.has(f)) continue;
-        const r = rulesFor(item.category).find(x => x.feature === f);
-        if (!r) continue;
+      const ruleRows = rulesFor(item.category);
+      for (const rawFeature of item.features || []) {
+        const f = normalizeFeature(rawFeature);
+        if (!isScoreableFeature(f)) continue;
+        const matchedRules = ruleRows.filter(x => normalizeFeature(x.feature) === f);
+        if (!matchedRules.length) continue;
+        const r = mergeFeatureRules(matchedRules, f);
         const aspect = aspectFromRule(r, f);
         if (!aspect) continue;
         const hotCount = Number(r.hot_count || 0);
@@ -647,19 +861,25 @@
         const row = { aspect, feature:f, sign, points, hotCount, slowCount, totalCount, rate, reliability, countWeight };
         if (!current || row.points > current.points) picked.set(aspect, row);
       }
+      for (const f of normalizeFeatureList(item.features || [])) {
+        if (!isScoreableFeature(f)) continue;
+        const aspect = aspectFromDetectedFeature(f);
+        if (aspect && !picked.has(aspect)) picked.set(aspect, { aspect, feature:f, sign:0, points:0, hotCount:0, slowCount:0, totalCount:0, rate:0, reliability:0, countWeight:0, detectedOnly:true });
+      }
       return SCORE_ASPECTS.map(aspect => picked.get(aspect) || { aspect, feature:'未明顯命中', sign:0, points:0, hotCount:0, slowCount:0, totalCount:0, rate:0, reliability:0, countWeight:0 });
     }
     function scorePartHtml(rows) {
       return `<div class="scoreBreakdown">${rows.map(r => {
         const cls = r.sign > 0 ? 'hot' : r.sign < 0 ? 'slow' : 'neutral';
         const val = r.sign > 0 ? `+${r.points}` : r.sign < 0 ? `-${r.points}` : '0';
-        const meta = r.totalCount ? `<br><span>熱${r.hotCount} / 滯${r.slowCount}；可信${Math.round(r.reliability*100)}%</span>` : '';
+        const meta = r.totalCount ? `<br><span>熱${r.hotCount} / 滯${r.slowCount}；可信${Math.round(r.reliability*100)}%</span>` : (r.detectedOnly ? '<br><span>已辨識，未列入加扣分</span>' : '');
         return `<div class="scorePart ${cls}"><b>${esc(r.aspect)}</b><br>${esc(r.feature)} <span>${val}</span>${meta}</div>`;
       }).join('')}</div>`;
     }
     function scoreItem(item) {
       let score = 5;
       const notes = [];
+      item.features = normalizeFeatureList([...(item.features || []), item.title || '', item.name || '', item.middleCategory || '']);
       const labels = (activeBranch.labelsByCode[item.code] || []).filter(x => !x.channel || x.channel === activeChannel);
       const aspectRows = scoreAspectRows(item);
       const hotAspectCount = aspectRows.filter(x => x.sign > 0).length;
@@ -723,19 +943,26 @@
           branchName: activeBranch.name,
           categories: activeBranch.categories,
           factorText: factors,
-          note: (els.note.value || '') + '\n請依七大面向辨識：設計元素、版型、領型、袖型/肩帶、材質/面料、風格感、圖案/花色。圖案/花色請特別看印花、條紋、格紋、素色、點點、豹紋、字母、LOGO。版型/褲型/腰型請特別看窄管、直筒、闊腿、喇叭、高腰、中腰、低腰、合身、寬鬆、短版、長版。若圖片是窄管褲，不可用寬褲/闊腿當類似款。',
+          note: (els.note.value || '') + '\n請依七大面向辨識，但評分重點只放在有設計辨識度的元素。必須仔細檢查：鏤空/簍空、綁帶/繫帶、透膚/透紗/薄紗/網紗、蕾絲/蕾絲邊、百褶/壓褶、格紋/條紋/波點/印花、魚尾、蛋糕裙、開衩、荷葉、不對稱、抽繩、空氣層面料、針織、羅紋、牛仔、皮革。洋裝版型請不要只寫合身，請判斷上合下寬、上合下合、上寬下寬或A字/魚尾/傘襬。短洋裝/長洋裝、短袖/長袖/無袖、素色/純色只能當描述，不可當主要評分元素。若圖片是罩衫，請特別判斷是否透膚、蕾絲、鏤空或針織。若圖片是襯衫，請特別判斷是否格紋、條紋、透膚、綁帶或剪裁設計。若圖片是窄管褲，不可用寬褲/闊腿當類似款。',
           imageDataUrl: item.dataUrl
         })
       });
-      const data = await res.json();
+      const raw = await res.text();
+      let data = {};
+      try {
+        data = raw ? JSON.parse(raw) : {};
+      } catch {
+        throw new Error('AI 後端沒有正確回應 JSON。請確認 Render 是 Web Service，且 server.mjs、package.json 已上傳。');
+      }
       if (!res.ok) throw new Error(data.error || 'AI 分析失敗');
       const parsed = data;
       if (activeBranch.categories.includes(parsed.category)) item.category = parsed.category;
       const allowed = new Set(activeBranch.featuresByCategory[item.category] || []);
-      item.features = Array.isArray(parsed.features) ? parsed.features.filter(f => allowed.has(f) || f) : [];
+      item.features = normalizeFeatureList(Array.isArray(parsed.features) ? parsed.features : []);
       item.title = parsed.title || item.title;
       item.summary = parsed.summary || '';
       item.middleCategory = parsed.middleCategory || item.middleCategory || styleType(item);
+      item.features = normalizeFeatureList([...(item.features || []), ...localFeatureHints(item)]).filter(f => allowed.has(f) || f);
       item.source = 'AI分析';
       item.analyzed = true;
     }
@@ -782,12 +1009,14 @@
     });
     document.getElementById('analyzeBtn').onclick = runAnalysis;
     els.chatBtn.onclick = askData;
+    els.chatResetBtn.onclick = resetChat;
     els.chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') askData(); });
     async function initApp() {
       try {
         const res = await fetch('data/app_data.json', {cache:'no-store'});
         if (!res.ok) throw new Error('data/app_data.json 載入失敗');
         APP = await res.json();
+        normalizeLoadedData();
         activeBranch = APP.branches[0];
         renderAll();
       } catch (err) {
