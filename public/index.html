@@ -86,6 +86,13 @@
     .scorePart.hot { border-left:4px solid var(--good); }
     .scorePart.slow { border-left:4px solid var(--bad); }
     .scorePart.neutral { border-left:4px solid #d0cfc6; }
+    .featureScoreTable { width:100%; border-collapse:collapse; margin:8px 0 10px; font-size:12px; background:#fffdf8; border:1px solid var(--line); }
+    .featureScoreTable th,.featureScoreTable td { border-bottom:1px solid var(--line); padding:7px 8px; text-align:left; vertical-align:top; }
+    .featureScoreTable th { background:#ede7dc; color:#4b3820; font-weight:800; }
+    .featureScoreTable tr:last-child td { border-bottom:0; }
+    .featureScoreTable .plus { color:#506b45; font-weight:800; }
+    .featureScoreTable .minus { color:#b32646; font-weight:800; }
+    .featureScoreTable .neutralText { color:#777; }
     .refLine { border-left:3px solid var(--line); padding:5px 8px; background:#f4f1ea; border-radius:4px; font-size:12px; color:#625d58; }
     .refLine.hot { border-left-color:#968871; }
     .refLine.slow { border-left-color:#625d58; }
@@ -444,7 +451,10 @@
       '荷葉':['荷葉','荷葉邊'],
       '蝴蝶結':['蝴蝶結','蝴蝶']
     };
-    const NON_SCORING_FEATURES = new Set(['素色','純色','長洋裝','短洋裝','長裙','短裙','長版','短版','長袖','短袖','無袖','細肩帶','寬肩帶','肩帶']);
+    const NON_SCORING_FEATURES = new Set([
+      '素色','純色','長洋裝','短洋裝','長裙','短裙','長版','短版','長袖','短袖','無袖','細肩帶','寬肩帶','肩帶',
+      '上衣','洋裝','裙子','褲子','外套','套裝','連身褲','褲裙','背心','BRA','BRA TOP','襯衫','TEE','T恤','罩衫','毛衣'
+    ]);
     const PRIORITY_FEATURES = ['蕾絲','透膚','鏤空','綁帶','百褶','格紋','條紋','波點','空氣層','蛋糕裙','魚尾裙','開衩','抽繩','不對稱','荷葉','蝴蝶結'];
     function normalizeFeature(feature) {
       const text = String(feature || '').trim();
@@ -835,6 +845,40 @@
       if (!isScoreableFeature(f)) return '';
       return aspectFromRule({ tag_group:'', tag_subtype:'' }, f);
     }
+    function scoreFeatureRows(item) {
+      const ruleRows = rulesFor(item.category);
+      const rows = [];
+      for (const f of normalizeFeatureList(item.features || [])) {
+        if (!isScoreableFeature(f)) continue;
+        const matchedRules = ruleRows.filter(x => normalizeFeature(x.feature) === f);
+        const aspect = matchedRules.length
+          ? aspectFromRule(mergeFeatureRules(matchedRules, f), f)
+          : aspectFromDetectedFeature(f);
+        if (!aspect) continue;
+        if (!matchedRules.length) {
+          rows.push({
+            feature:f, aspect, hotCount:0, slowCount:0, totalCount:0, hotRate:null,
+            sign:0, points:0, reliability:0, countWeight:0, status:'已辨識，歷史樣本不足'
+          });
+          continue;
+        }
+        const r = mergeFeatureRules(matchedRules, f);
+        const hotCount = Number(r.hot_count || 0);
+        const slowCount = Number(r.slow_count || 0);
+        const totalCount = hotCount + slowCount;
+        const hotRate = totalCount ? hotCount / totalCount : 0;
+        const targetCount = hotCount >= slowCount ? hotCount : slowCount;
+        const sign = hotCount === slowCount ? 0 : (hotCount > slowCount ? 1 : -1);
+        const reliability = totalCount <= 2 ? 0.4 : totalCount <= 5 ? 0.6 : totalCount <= 10 ? 0.8 : 1;
+        const countWeight = targetCount <= 2 ? 1 : targetCount <= 5 ? 2 : targetCount <= 10 ? 3 : targetCount <= 20 ? 4 : 5;
+        const points = sign ? Math.round((targetCount / Math.max(1, totalCount)) * reliability * countWeight * 10) / 10 : 0;
+        rows.push({
+          feature:f, aspect, hotCount, slowCount, totalCount, hotRate, sign, points, reliability, countWeight,
+          status: sign > 0 ? '加分' : sign < 0 ? '扣分' : '中性'
+        });
+      }
+      return rows.sort((a,b) => Math.abs(b.points) - Math.abs(a.points) || b.totalCount - a.totalCount || a.feature.localeCompare(b.feature, 'zh-Hant'));
+    }
     function scoreAspectRows(item) {
       const picked = new Map();
       const ruleRows = rulesFor(item.category);
@@ -866,6 +910,26 @@
       }
       return SCORE_ASPECTS.map(aspect => picked.get(aspect) || { aspect, feature:'未明顯命中', sign:0, points:0, hotCount:0, slowCount:0, totalCount:0, rate:0, reliability:0, countWeight:0 });
     }
+    function scoreFeatureTableHtml(rows, category) {
+      if (!rows.length) return '<div class="small">尚未辨識到可列入評分的設計標籤。</div>';
+      return `<table class="featureScoreTable">
+        <thead><tr><th>標籤</th><th>面向</th><th>${esc(category)}熱銷</th><th>${esc(category)}滯銷</th><th>熱銷比</th><th>加扣分</th></tr></thead>
+        <tbody>${rows.map(r => {
+          const cls = r.sign > 0 ? 'plus' : r.sign < 0 ? 'minus' : 'neutralText';
+          const rate = r.hotRate === null ? '樣本不足' : `${Math.round(r.hotRate * 100)}%`;
+          const val = r.sign > 0 ? `+${r.points}` : r.sign < 0 ? `-${r.points}` : '0';
+          const hint = r.totalCount ? `可信${Math.round(r.reliability * 100)}%` : r.status;
+          return `<tr>
+            <td><b>${esc(r.feature)}</b></td>
+            <td>${esc(r.aspect)}</td>
+            <td>${r.hotCount}</td>
+            <td>${r.slowCount}</td>
+            <td>${rate}</td>
+            <td class="${cls}">${val}<br><span class="small">${esc(hint)}</span></td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>`;
+    }
     function scorePartHtml(rows) {
       return `<div class="scoreBreakdown">${rows.map(r => {
         const cls = r.sign > 0 ? 'hot' : r.sign < 0 ? 'slow' : 'neutral';
@@ -879,6 +943,7 @@
       const notes = [];
       item.features = normalizeFeatureList([...(item.features || []), item.title || '', item.name || '', item.middleCategory || '']);
       const labels = (activeBranch.labelsByCode[item.code] || []).filter(x => !x.channel || x.channel === activeChannel);
+      const featureRows = scoreFeatureRows(item);
       const aspectRows = scoreAspectRows(item);
       const hotAspectCount = aspectRows.filter(x => x.sign > 0).length;
       const slowAspectCount = aspectRows.filter(x => x.sign < 0).length;
@@ -899,7 +964,7 @@
       if (slowSimilar.length) notes.push(`類似滯銷款：${formatSimilar(slowSimilar)}`);
       score = Math.max(1, Math.min(10, Math.round(score * 10) / 10));
       const decision = score >= 8 ? ['立即開發','good'] : score >= 6.5 ? ['觀察後開發','watch'] : ['不建議開發','bad'];
-      return { score, decision, notes: notes.join('\n') || '等待圖片分析。', hotSimilar, slowSimilar, aspectRows };
+      return { score, decision, notes: notes.join('\n') || '等待圖片分析。', hotSimilar, slowSimilar, aspectRows, featureRows };
     }
     function renderResults() {
       if (!state.length) {
@@ -922,6 +987,7 @@
           <div>
             <div class="itemTop"><div><b>${esc(item.title || item.name)}</b><div class="small">圖片上傳　${esc(item.category)}${item.middleCategory ? ' / ' + esc(item.middleCategory) : ''}　${esc(item.source)}</div></div><div class="score ${s.decision[1] === 'good' ? 'good' : s.decision[1] === 'watch' ? 'warn' : ''}">${s.score}</div></div>
             <div class="tags">${(item.features || []).map(f => `<span class="tag">${esc(f)}</span>`).join('')}</div>
+            ${scoreFeatureTableHtml(s.featureRows, item.category)}
             ${scorePartHtml(s.aspectRows)}
             <div class="small">${esc(s.notes)}</div>
             <div class="similarRefs">${s.hotSimilar.map(x => refCard(x, 'hot')).join('')}${s.slowSimilar.map(x => refCard(x, 'slow')).join('')}</div>
