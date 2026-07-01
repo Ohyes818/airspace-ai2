@@ -581,7 +581,24 @@
       return rows.map(x => `${x.code} ${x.name}(${x.period}，${x.label}，共通：${(x.common || []).join('、') || '同品類'})`).join('；');
     }
     function refCard(x, type) {
-      return `<div class="refLine ${type}"><b>${esc(x.code)}</b>　${esc(x.name)}<br><span class="small">${esc(x.period)} / ${esc(x.label)} / ${Number(x.total_qty || 0).toLocaleString()}件${x.source_pdf ? ' / 原圖：' + esc(x.source_pdf) + ' 第' + esc(x.page) + '頁' : ''}</span><br><span class="small">共通：${esc((x.common || []).join('、') || x.middleCategory || '同款式型')}</span></div>`;
+      const qtyOrAmount = x.total_qty ? `${Number(x.total_qty || 0).toLocaleString()}件` : (x.amount ? `金額 ${Number(x.amount || 0).toLocaleString()}` : '');
+      const label = x.label || (type === 'hot' ? '暢銷參考' : '滯銷參考');
+      return `<div class="refLine ${type}"><b>${esc(x.code)}</b>　${esc(x.name)}<br><span class="small">${esc(x.period)} / ${esc(label)}${qtyOrAmount ? ' / ' + esc(qtyOrAmount) : ''}${x.source_pdf ? ' / 原圖：' + esc(x.source_pdf) + ' 第' + esc(x.page) + '頁' : ''}</span><br><span class="small">共通：${esc((x.common || []).join('、') || x.feature || x.middleCategory || '同款式型')}</span></div>`;
+    }
+    function exampleRefsFromFeatureRows(featureRows, wantedType) {
+      const refs = [];
+      const seen = new Set();
+      for (const row of featureRows || []) {
+        const examples = wantedType === 'hot' ? (row.hotExamples || []) : (row.slowExamples || []);
+        for (const ex of examples) {
+          const key = `${ex.code || ''}|${ex.period || ''}|${ex.source_pdf || ''}|${ex.page || ''}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          refs.push({ ...ex, feature: row.feature, label: wantedType === 'hot' ? '暢銷參考' : '滯銷參考', common: [row.feature] });
+          if (refs.length >= 3) return refs;
+        }
+      }
+      return refs;
     }
     const QUERY_FEATURES = {
       '皮革/皮質':['皮外套','皮革','皮質','仿皮','皮衣','皮'],
@@ -852,8 +869,10 @@
         acc.slow_count += Number(r.slow_count || 0);
         acc.tag_group += ` ${r.tag_group || ''}`;
         acc.tag_subtype += ` ${r.tag_subtype || ''}`;
+        acc.hot_examples.push(...(r.hot_examples || []));
+        acc.slow_examples.push(...(r.slow_examples || []));
         return acc;
-      }, { feature, hot_count:0, slow_count:0, tag_group:'', tag_subtype:'' });
+      }, { feature, hot_count:0, slow_count:0, tag_group:'', tag_subtype:'', hot_examples:[], slow_examples:[] });
     }
     function aspectFromRule(rule, feature) {
       const f = normalizeFeature(feature);
@@ -901,7 +920,9 @@
         const points = sign ? Math.round((targetCount / Math.max(1, totalCount)) * reliability * countWeight * 10) / 10 : 0;
         rows.push({
           feature:f, aspect, hotCount, slowCount, totalCount, hotRate, sign, points, reliability, countWeight,
-          status: sign > 0 ? '加分' : sign < 0 ? '扣分' : '中性'
+          status: sign > 0 ? '加分' : sign < 0 ? '扣分' : '中性',
+          hotExamples: r.hot_examples || [],
+          slowExamples: r.slow_examples || []
         });
       }
       return rows.sort((a,b) => Math.abs(b.points) - Math.abs(a.points) || b.totalCount - a.totalCount || a.feature.localeCompare(b.feature, 'zh-Hant'));
@@ -984,8 +1005,10 @@
         notes.push(`歷史標籤：${labels.map(x => x.period + x.label).join('、')}`);
       }
       if (item.summary) notes.push(item.summary);
-      const hotSimilar = similarItems(item, '暢銷');
-      const slowSimilar = similarItems(item, '滯銷');
+      let hotSimilar = similarItems(item, '暢銷');
+      let slowSimilar = similarItems(item, '滯銷');
+      if (!hotSimilar.length) hotSimilar = exampleRefsFromFeatureRows(featureRows.filter(r => r.sign > 0), 'hot');
+      if (!slowSimilar.length) slowSimilar = exampleRefsFromFeatureRows(featureRows.filter(r => r.sign < 0), 'slow');
       score += Math.min(1, hotSimilar.length * 0.5) - Math.min(1, slowSimilar.length * 0.5);
       notes.push(`加權面向：暢銷命中 ${hotAspectCount} 個、滯銷命中 ${slowAspectCount} 個、中性/未命中 ${SCORE_ASPECTS.length - hotAspectCount - slowAspectCount} 個；面向合計 ${weightedDelta >= 0 ? '+' : ''}${Math.round(weightedDelta * 10) / 10} 分。`);
       if (hotSimilar.length) notes.push(`類似暢銷款：${formatSimilar(hotSimilar)}`);
