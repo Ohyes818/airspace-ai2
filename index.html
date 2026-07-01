@@ -277,6 +277,20 @@
     function channelLabel(c) {
       return c === '總' ? '總(網路+門市)' : c;
     }
+    function channelAliases(channel) {
+      if (channel === '總' || channel === '總(網路+門市)') return ['總', '總(網路+門市)', '全部', ''];
+      if (channel === '網路') return ['網路', '網', '線上', 'ONLINE', 'online'];
+      if (channel === '門市') return ['門市', '門', '店', 'STORE', 'store'];
+      return [channel];
+    }
+    function channelMatches(rowChannel, selectedChannel) {
+      return channelAliases(selectedChannel).includes(rowChannel || '總');
+    }
+    function rowsForChannel(rows, selectedChannel) {
+      const exact = (rows || []).filter(r => channelMatches(r.channel, selectedChannel));
+      if (exact.length) return exact;
+      return (rows || []).filter(r => channelMatches(r.channel, '總'));
+    }
     function normalizeLoadedData() {
       if (!APP || !Array.isArray(APP.branches)) return;
       APP.dataVersion = APP.dataVersion || `資料修正版 ${new Date().toLocaleString('zh-TW')}`;
@@ -291,11 +305,13 @@
           categories.forEach(cat => labelCounts[ch][cat] = {hot:0, slow:0});
         });
         Object.values(branch.labelsByCode || {}).flat().forEach(label => {
-          const ch = label.channel || '總';
           const cat = label.category;
-          if (!labelCounts[ch] || !labelCounts[ch][cat]) return;
-          if (String(label.label || '').includes('暢銷')) labelCounts[ch][cat].hot += 1;
-          if (String(label.label || '').includes('滯銷')) labelCounts[ch][cat].slow += 1;
+          channels.forEach(ch => {
+            if (!channelMatches(label.channel, ch)) return;
+            if (!labelCounts[ch] || !labelCounts[ch][cat]) return;
+            if (String(label.label || '').includes('暢銷')) labelCounts[ch][cat].hot += 1;
+            if (String(label.label || '').includes('滯銷')) labelCounts[ch][cat].slow += 1;
+          });
         });
         const hotRows = rows => rows
           .filter(r => validFeatureName(r.feature) && Number(r.hot_count || 0) > Number(r.slow_count || 0) && Number(r.hot_count || 0) > 0)
@@ -307,7 +323,7 @@
         branch.overviewHotByChannel = {};
         branch.overviewSlowByChannel = {};
         channels.forEach(ch => {
-          const chRules = rules.filter(r => (r.channel || '總') === ch);
+          const chRules = rowsForChannel(rules, ch);
           branch.overviewHotByChannel[ch] = hotRows(chRules).map(r => ({feature:r.feature, count:r.hot_count}));
           branch.overviewSlowByChannel[ch] = slowRows(chRules).map(r => ({feature:r.feature, count:r.slow_count}));
           branch.categoryCardsByChannel[ch] = categories.map(cat => {
@@ -419,7 +435,10 @@
       ['高腰','低腰'],
       ['短版','長版']
     ];
-    function rulesFor(category) { return activeBranch.rules.filter(r => r.category === category && r.channel === activeChannel && r.score_weight !== 0); }
+    function rulesFor(category) {
+      return rowsForChannel(activeBranch.rules || [], activeChannel)
+        .filter(r => r.category === category && r.score_weight !== 0);
+    }
     function featureAliases(feature) {
       feature = normalizeFeature(feature);
       const words = new Set([feature]);
@@ -459,6 +478,7 @@
     function normalizeFeature(feature) {
       const text = String(feature || '').trim();
       if (!text) return '';
+      if (looksLikeFileName(text)) return '';
       for (const canonical of PRIORITY_FEATURES) {
         const words = FEATURE_NORMALIZE[canonical] || [canonical];
         if (text === canonical || words.some(w => text.includes(w))) return canonical;
@@ -482,9 +502,16 @@
     function normalizeFeatureList(list) {
       return [...new Set((list || []).flatMap(expandFeatureTokens).filter(Boolean))];
     }
+    function looksLikeFileName(text) {
+      const value = String(text || '').trim();
+      return /\.(jpg|jpeg|png|webp|gif|bmp|heic)$/i.test(value)
+        || /^LINE_ALBUM[_\s-]/i.test(value)
+        || /^\d+[\s_-]*\(?\d*\)?[_\s-]*\d*\.(jpg|jpeg|png|webp)$/i.test(value)
+        || /現貨.*\.(jpg|jpeg|png|webp)$/i.test(value);
+    }
     function isScoreableFeature(feature) {
       const f = normalizeFeature(feature);
-      return Boolean(f) && !NON_SCORING_FEATURES.has(f);
+      return Boolean(f) && !NON_SCORING_FEATURES.has(f) && !looksLikeFileName(f);
     }
     function localFeatureHints(item) {
       const text = `${item.name || ''} ${item.title || ''} ${item.middleCategory || ''} ${item.summary || ''} ${(item.features || []).join(' ')}`;
@@ -539,7 +566,7 @@
         return matchedRules.length && aspectFromRule(mergeFeatureRules(matchedRules, f), f);
       });
       return examples
-        .filter(x => String(x.label || '').includes(labelText) && x.code !== item.code && x.channel === activeChannel)
+        .filter(x => String(x.label || '').includes(labelText) && x.code !== item.code && channelMatches(x.channel, activeChannel))
         .filter(x => styleCompatible(item, x))
         .map(x => {
           const common = scoreFeatures.filter(f => featureMatches(f, x));
@@ -941,8 +968,9 @@
     function scoreItem(item) {
       let score = 5;
       const notes = [];
-      item.features = normalizeFeatureList([...(item.features || []), item.title || '', item.name || '', item.middleCategory || '']);
-      const labels = (activeBranch.labelsByCode[item.code] || []).filter(x => !x.channel || x.channel === activeChannel);
+      const textFeatureSources = [item.title || '', item.name || '', item.middleCategory || ''].filter(x => !looksLikeFileName(x));
+      item.features = normalizeFeatureList([...(item.features || []), ...textFeatureSources]);
+      const labels = (activeBranch.labelsByCode[item.code] || []).filter(x => channelMatches(x.channel, activeChannel));
       const featureRows = scoreFeatureRows(item);
       const aspectRows = scoreAspectRows(item);
       const hotAspectCount = aspectRows.filter(x => x.sign > 0).length;
@@ -988,7 +1016,6 @@
             <div class="itemTop"><div><b>${esc(item.title || item.name)}</b><div class="small">圖片上傳　${esc(item.category)}${item.middleCategory ? ' / ' + esc(item.middleCategory) : ''}　${esc(item.source)}</div></div><div class="score ${s.decision[1] === 'good' ? 'good' : s.decision[1] === 'watch' ? 'warn' : ''}">${s.score}</div></div>
             <div class="tags">${(item.features || []).map(f => `<span class="tag">${esc(f)}</span>`).join('')}</div>
             ${scoreFeatureTableHtml(s.featureRows, item.category)}
-            ${scorePartHtml(s.aspectRows)}
             <div class="small">${esc(s.notes)}</div>
             <div class="similarRefs">${s.hotSimilar.map(x => refCard(x, 'hot')).join('')}${s.slowSimilar.map(x => refCard(x, 'slow')).join('')}</div>
             <div class="decision"><b class="${s.decision[1]}">${s.decision[0]}</b><button class="secondary" type="button">加入報表</button></div>
