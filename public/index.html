@@ -31,7 +31,9 @@
     .branchBar { display:flex; gap:10px; flex-wrap:wrap; margin:10px 0 16px; }
     .branch { border:1px solid var(--line); background:#fffdf8; color:var(--ink); min-width:150px; padding:12px 22px; border-radius:4px; text-align:center; font-weight:800; cursor:pointer; }
     .branch.active { background:var(--nav2); color:#fff; border-color:var(--nav2); }
-    .channelBar { display:flex; gap:8px; flex-wrap:wrap; margin:0 0 16px; }
+    .channelBar { display:flex; gap:14px; flex-wrap:wrap; margin:0 0 16px; align-items:center; }
+    .channelGroup { display:flex; gap:8px; flex-wrap:wrap; align-items:center; border:1px solid var(--line); border-radius:4px; background:#fffdf8; padding:8px 10px; }
+    .channelGroupLabel { font-weight:900; color:#46381f; padding:0 4px; }
     .channelBtn { min-width:96px; padding:9px 14px; background:#fffdf8; color:var(--ink); border:1px solid var(--line); }
     .channelBtn.active { background:#968871; color:#fff; border-color:#968871; }
     .controls { display:flex; gap:10px; align-items:center; }
@@ -108,6 +110,18 @@
     .chatPic img { width:100%; height:100%; object-fit:cover; border-radius:3px; }
     .chatAsk { display:grid; grid-template-columns:1fr 92px 92px; gap:8px; }
     .empty { border:1px dashed var(--line); border-radius:4px; padding:28px; text-align:center; color:var(--muted); background:#fffdf8; }
+    .colorRankPanel { background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:16px; margin-top:14px; }
+    .colorRankHeader { display:flex; justify-content:space-between; align-items:end; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
+    .colorRankMeta { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0 12px; }
+    .colorRankTableWrap { overflow:auto; border:1px solid var(--line); border-radius:4px; background:#fffdf8; }
+    .colorRankTable { width:100%; border-collapse:collapse; min-width:920px; font-size:13px; }
+    .colorRankTable th,.colorRankTable td { border-bottom:1px solid var(--line); padding:9px 10px; text-align:left; vertical-align:top; }
+    .colorRankTable th { position:sticky; top:0; background:#ede7dc; color:#46381f; font-weight:800; z-index:1; }
+    .colorRankTable tr:nth-child(even) td { background:#fbf8f0; }
+    .rankNo { font-weight:900; color:#46381f; }
+    .colorQty { font-weight:900; color:#5f6b50; }
+    .exampleText { color:#625d58; line-height:1.5; max-width:520px; }
+
     @media (max-width:1100px) { .app { grid-template-columns:1fr; } aside { position:static; } .uploadWorkspace,.uploadTools,.grid2,.catGrid { grid-template-columns:1fr; } .uploadPanel,.scoreGuide { grid-column:auto; grid-row:auto; position:static; } }
   </style>
 </head>
@@ -136,18 +150,40 @@
             <div class="small" style="color:#625d58">功能 1</div>
             <h1>依品項熱銷 / 滯銷標籤分析</h1>
           </div>
-          <div class="controls">
+          <div class="controls" id="factorControls">
             <select id="categoryFilter"><option value="全部品類">全部品類</option></select>
             <button id="refreshFactors">重新分析</button>
           </div>
         </div>
         <div id="branches" class="branchBar"></div>
         <div id="channels" class="channelBar"></div>
-        <div class="grid2">
-          <div class="factorBox"><h3>熱銷元素</h3><div id="overallHot" class="chips"></div></div>
-          <div class="factorBox"><h3>滯銷元素</h3><div id="overallSlow" class="chips"></div></div>
+        <div id="factorContent">
+          <div class="grid2">
+            <div class="factorBox"><h3>熱銷元素</h3><div id="overallHot" class="chips"></div></div>
+            <div class="factorBox"><h3>滯銷元素</h3><div id="overallSlow" class="chips"></div></div>
+          </div>
+          <div id="categoryCards" class="catGrid"></div>
         </div>
-        <div id="categoryCards" class="catGrid"></div>
+
+        <div class="colorRankPanel" id="colorRank">
+          <div class="colorRankHeader">
+            <div>
+              <h2 style="margin-top:0">品項顏色銷售件數排行</h2>
+              <div class="small">顏色銷量只看 PDF 每款旁邊的網路/門市顏色件數；品項與品名由 Excel/總表款號補強。</div>
+            </div>
+            <div class="controls">
+              <select id="colorCategoryFilter"><option value="全部品項">全部品項</option></select>
+              <select id="colorTopLimit"><option value="10">前 10</option><option value="20">前 20</option><option value="50">前 50</option><option value="9999">全部</option></select>
+            </div>
+          </div>
+          <div class="colorRankMeta">
+            <span class="chip hot">排序依據：銷售件數</span>
+            <span class="chip">通路：總(網路+門市) / 網路 / 門市</span>
+            <span class="chip">支線：AS / A+ / CA / OL</span>
+          </div>
+          <div id="colorRankSummary" class="small"></div>
+          <div class="colorRankTableWrap"><table class="colorRankTable" id="colorRankTable"></table></div>
+        </div>
       </section>
 
       <section id="upload">
@@ -215,6 +251,7 @@
     let APP = {branches: [], images: {}};
     let activeBranch = null;
     let activeChannel = '總';
+    let activeView = 'factors';
     const state = [];
     const LABEL_PREVIEW_LIMIT = 40;
     const labelExpanded = new Set();
@@ -222,10 +259,17 @@
     const els = {
       branches: document.getElementById('branches'),
       channels: document.getElementById('channels'),
+      factorControls: document.getElementById('factorControls'),
+      factorContent: document.getElementById('factorContent'),
+      colorRankSection: document.getElementById('colorRank'),
       categoryFilter: document.getElementById('categoryFilter'),
       overallHot: document.getElementById('overallHot'),
       overallSlow: document.getElementById('overallSlow'),
       categoryCards: document.getElementById('categoryCards'),
+      colorCategoryFilter: document.getElementById('colorCategoryFilter'),
+      colorTopLimit: document.getElementById('colorTopLimit'),
+      colorRankSummary: document.getElementById('colorRankSummary'),
+      colorRankTable: document.getElementById('colorRankTable'),
       files: document.getElementById('files'),
       note: document.getElementById('note'),
       results: document.getElementById('results'),
@@ -276,6 +320,9 @@
     }
     function channelLabel(c) {
       return c === '總' ? '總(網路+門市)' : c;
+    }
+    function channelShortLabel(c) {
+      return c === '總' ? '全通' : c;
     }
     function channelAliases(channel) {
       if (channel === '總' || channel === '總(網路+門市)') return ['總', '總(網路+門市)', '全部', ''];
@@ -347,11 +394,22 @@
     function renderChannels() {
       const channels = activeBranch.channels || ['總','網路','門市'];
       if (!channels.includes(activeChannel)) activeChannel = '總';
-      els.channels.innerHTML = channels.map(c => `<button class="channelBtn ${c===activeChannel?'active':''}" data-channel="${esc(c)}">${esc(channelLabel(c))}</button>`).join('');
+      const group = (view, label) => `
+        <div class="channelGroup">
+          <span class="channelGroupLabel">${label}</span>
+          ${channels.map(c => `<button class="channelBtn ${view===activeView && c===activeChannel?'active':''}" data-view="${view}" data-channel="${esc(c)}">${esc(channelShortLabel(c))}</button>`).join('')}
+        </div>`;
+      els.channels.innerHTML = group('factors', '暢滯銷標籤') + group('colors', '顏色排行');
       els.channels.querySelectorAll('button').forEach(btn => btn.onclick = () => {
+        activeView = btn.dataset.view || 'factors';
         activeChannel = btn.dataset.channel;
         renderAll();
       });
+    }
+    function renderViewMode() {
+      if (els.factorContent) els.factorContent.style.display = activeView === 'factors' ? '' : 'none';
+      if (els.colorRankSection) els.colorRankSection.style.display = activeView === 'colors' ? '' : 'none';
+      if (els.factorControls) els.factorControls.style.display = activeView === 'factors' ? '' : 'none';
     }
     function renderFilters() {
       const old = els.categoryFilter.value;
@@ -384,7 +442,45 @@
           </div>
         </article>`).join('');
     }
-    function renderAll() { renderBranch(); renderChannels(); renderFilters(); renderFactors(); }
+
+    function colorRowsForActiveScope() {
+      const rows = activeBranch.colorRankings || [];
+      const selectedCategory = els.colorCategoryFilter?.value || '全部品項';
+      return rows.filter(r => channelMatches(r.channel, activeChannel))
+        .filter(r => selectedCategory === '全部品項' || r.category === selectedCategory)
+        .sort((a,b) => (a.category || '').localeCompare(b.category || '', 'zh-Hant') || Number(a.rank || 0) - Number(b.rank || 0));
+    }
+    function renderColorRankFilters() {
+      if (!els.colorCategoryFilter) return;
+      const old = els.colorCategoryFilter.value;
+      const categories = [...new Set((activeBranch.colorRankings || []).filter(r => channelMatches(r.channel, activeChannel)).map(r => r.category).filter(Boolean))];
+      els.colorCategoryFilter.innerHTML = '<option value="全部品項">全部品項</option>' + categories.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+      if ([...els.colorCategoryFilter.options].some(o => o.value === old)) els.colorCategoryFilter.value = old;
+    }
+    function renderColorRankings() {
+      if (!els.colorRankTable) return;
+      renderColorRankFilters();
+      const limit = Number(els.colorTopLimit?.value || 10);
+      const rows = colorRowsForActiveScope().filter(r => Number(r.rank || 0) <= limit);
+      const channelName = channelLabel(activeChannel);
+      els.colorRankSummary.innerHTML = `目前顯示 <b>${esc(activeBranch.name)}</b> / <b>${esc(channelName)}</b>，共 ${rows.length.toLocaleString()} 筆顏色排行，依 <b>銷售件數</b> 排序。`;
+      if (!rows.length) {
+        els.colorRankTable.innerHTML = '<tbody><tr><td><div class="empty">目前沒有符合條件的顏色資料</div></td></tr></tbody>';
+        return;
+      }
+      els.colorRankTable.innerHTML = `
+        <thead><tr><th>品項</th><th>排名</th><th>顏色</th><th>銷售件數</th><th>款數</th><th>銷售金額</th><th>代表款號 / 品名</th></tr></thead>
+        <tbody>${rows.map(r => `<tr>
+          <td><b>${esc(r.category)}</b></td>
+          <td class="rankNo">${Number(r.rank || 0)}</td>
+          <td><span class="chip hot">${esc(r.color)}</span></td>
+          <td class="colorQty">${Number(r.qty || 0).toLocaleString()}</td>
+          <td>${Number(r.styleCount || 0).toLocaleString()}</td>
+          <td>${Number(r.amount || 0).toLocaleString()}</td>
+          <td class="exampleText">${esc(r.examples || '')}</td>
+        </tr>`).join('')}</tbody>`;
+    }
+    function renderAll() { renderBranch(); renderChannels(); renderViewMode(); renderFilters(); renderFactors(); renderColorRankings(); }
     function branchFromText(text) {
       const upper = String(text || '').toUpperCase();
       if (upper.includes('A+') || upper.includes('大尺碼')) return 'A+';
@@ -413,6 +509,8 @@
       }
     }
     els.categoryFilter.onchange = renderFactors;
+    if (els.colorCategoryFilter) els.colorCategoryFilter.onchange = renderColorRankings;
+    if (els.colorTopLimit) els.colorTopLimit.onchange = renderColorRankings;
     document.getElementById('refreshFactors').onclick = renderFactors;
 
     function detectCode(name) {
