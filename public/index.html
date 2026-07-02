@@ -454,6 +454,12 @@
       '細肩帶':['細肩','細肩帶'],
       '長洋裝':['長洋裝','長裙','長版洋裝'],
       '短洋裝':['短洋裝','短版洋裝'],
+      '上合下寬':['上合下寬','上身合身下擺寬','上身合下身寬'],
+      '上合下合':['上合下合','上身合身下身合','合身包臀'],
+      '上寬下合':['上寬下合','上身寬鬆下身合','上寬下窄'],
+      'A字':['A字'],
+      '傘襬':['傘襬','傘擺'],
+      '包臀':['包臀'],
       '合身':['合身','修身','緊身'],
       '素色':['素色','純色'],
       '條紋':['直紋','直條','條紋','橫條'],
@@ -512,6 +518,16 @@
     function isScoreableFeature(feature) {
       const f = normalizeFeature(feature);
       return Boolean(f) && !NON_SCORING_FEATURES.has(f) && !looksLikeFileName(f);
+    }
+    function equivalentRuleFeatures(feature) {
+      const f = normalizeFeature(feature);
+      if (f === '上合下寬') return ['上合下寬','A字','傘襬'];
+      if (f === '上合下合') return ['上合下合','包臀'];
+      if (f === '上寬下合') return ['上寬下合'];
+      return [f];
+    }
+    function hasSpecificSilhouette(item) {
+      return normalizeFeatureList(item.features || []).some(f => ['上合下寬','上合下合','上寬下合','A字','傘襬','魚尾裙','包臀'].includes(f));
     }
     function localFeatureHints(item) {
       const text = `${item.name || ''} ${item.title || ''} ${item.middleCategory || ''} ${item.summary || ''} ${(item.features || []).join(' ')}`;
@@ -894,9 +910,12 @@
     function scoreFeatureRows(item) {
       const ruleRows = rulesFor(item.category);
       const rows = [];
+      const specificSilhouette = hasSpecificSilhouette(item);
       for (const f of normalizeFeatureList(item.features || [])) {
         if (!isScoreableFeature(f)) continue;
-        const matchedRules = ruleRows.filter(x => normalizeFeature(x.feature) === f);
+        if (specificSilhouette && f === '合身') continue;
+        const equivalents = equivalentRuleFeatures(f);
+        const matchedRules = ruleRows.filter(x => equivalents.includes(normalizeFeature(x.feature)));
         const aspect = matchedRules.length
           ? aspectFromRule(mergeFeatureRules(matchedRules, f), f)
           : aspectFromDetectedFeature(f);
@@ -930,10 +949,13 @@
     function scoreAspectRows(item) {
       const picked = new Map();
       const ruleRows = rulesFor(item.category);
+      const specificSilhouette = hasSpecificSilhouette(item);
       for (const rawFeature of item.features || []) {
         const f = normalizeFeature(rawFeature);
         if (!isScoreableFeature(f)) continue;
-        const matchedRules = ruleRows.filter(x => normalizeFeature(x.feature) === f);
+        if (specificSilhouette && f === '合身') continue;
+        const equivalents = equivalentRuleFeatures(f);
+        const matchedRules = ruleRows.filter(x => equivalents.includes(normalizeFeature(x.feature)));
         if (!matchedRules.length) continue;
         const r = mergeFeatureRules(matchedRules, f);
         const aspect = aspectFromRule(r, f);
@@ -1057,7 +1079,7 @@
           branchName: activeBranch.name,
           categories: activeBranch.categories,
           factorText: factors,
-          note: (els.note.value || '') + '\n請依七大面向辨識，但評分重點只放在有設計辨識度的元素。必須仔細檢查：鏤空/簍空、綁帶/繫帶、透膚/透紗/薄紗/網紗、蕾絲/蕾絲邊、百褶/壓褶、格紋/條紋/波點/印花、魚尾、蛋糕裙、開衩、荷葉、不對稱、抽繩、空氣層面料、針織、羅紋、牛仔、皮革。洋裝版型請不要只寫合身，請判斷上合下寬、上合下合、上寬下寬或A字/魚尾/傘襬。短洋裝/長洋裝、短袖/長袖/無袖、素色/純色只能當描述，不可當主要評分元素。若圖片是罩衫，請特別判斷是否透膚、蕾絲、鏤空或針織。若圖片是襯衫，請特別判斷是否格紋、條紋、透膚、綁帶或剪裁設計。若圖片是窄管褲，不可用寬褲/闊腿當類似款。',
+          note: (els.note.value || '') + '\n請依七大面向辨識，但評分重點只放在有設計辨識度的元素。必須仔細檢查：鏤空/簍空、綁帶/繫帶、透膚/透紗/薄紗/網紗、蕾絲/蕾絲邊、百褶/壓褶、格紋/條紋/波點/印花、魚尾、蛋糕裙、開衩、荷葉、不對稱、抽繩、空氣層面料、針織、羅紋、牛仔、皮革。洋裝版型請不要只寫合身或寬鬆，請判斷上合下寬、上合下合、上寬下合。短洋裝/長洋裝、短袖/長袖/無袖、素色/純色只能當描述，不可當主要評分元素。若圖片是罩衫，請特別判斷是否透膚、蕾絲、鏤空或針織。若圖片是襯衫，請特別判斷是否格紋、條紋、透膚、綁帶或剪裁設計。若圖片是窄管褲，不可用寬褲/闊腿當類似款。',
           imageDataUrl: item.dataUrl
         })
       });
